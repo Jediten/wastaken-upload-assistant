@@ -1,11 +1,14 @@
 # Upload Assistant © 2025 Audionut & wastaken7 — Licensed under UAPL v1.0
+import re
 from typing import Any, cast
 
+import httpx
 import pycountry
 
 from src.console import logger
 from src.languages import languages_manager
 from src.meta import Meta
+from src.tmdb import get_tmdb_localized_data
 from src.trackers.common import Common
 from src.trackers.UNIT3D import UNIT3D
 
@@ -136,6 +139,9 @@ class InfinityHD(UNIT3D):
         ihd_name = meta.name
         resolution = meta.resolution
 
+        if meta.category == "TV":
+            ihd_name = await self._tv_name(meta, ihd_name)
+
         if not meta.language_checked:
             await languages_manager.process_desc_language(meta, tracker=self.tracker)
         audio_languages_value = meta.audio_languages
@@ -148,6 +154,86 @@ class InfinityHD(UNIT3D):
             ihd_name = ihd_name.replace(resolution, f"{foreign_lang} {resolution}", 1)
 
         return {"name": ihd_name}
+
+    async def _tv_name(self, meta: Meta, name: str) -> str:
+        tmdb_title = await self._tmdb_en_title(meta)
+        marker = f"{meta.season or ''}{meta.episode or ''}".strip()
+        if not marker or marker not in name:
+            return " ".join(name.split())
+
+        # Rebuild the head as title -> AKA -> year, leaving the marker and everything after it intact.
+        aka = "" if meta.no_aka else self._localized_aka(meta, tmdb_title)
+        year = str(meta.year or "").strip() if (not meta.no_year and await self._tv_title_needs_year(meta, tmdb_title)) else ""
+        tail = name.partition(marker)[2]
+        lead = " ".join(part for part in (tmdb_title, aka, year) if part)
+        return " ".join(f"{lead} {marker}{tail}".split())
+
+    async def _tmdb_en_title(self, meta: Meta) -> str:
+        """Canonical TMDB (en-US) title.
+
+        The core replaces meta.title with the TVDB series name for non-English-origin TV;
+        this site wants the TMDB title, matching what its metadata panel displays.
+        """
+        try:
+            tmdb_main = await get_tmdb_localized_data(meta, data_type="main", language="en-US", append_to_response="")
+        except Exception:  # noqa: BLE001 - a naming lookup must never abort the upload
+            tmdb_main = {}
+        data = tmdb_main if isinstance(tmdb_main, dict) else {}
+        title = str(data.get("name") or data.get("title") or "").strip()
+        return title or str(meta.title or "").strip()
+
+    @staticmethod
+    def _localized_aka(meta: Meta, tmdb_title: str) -> str:
+        """AKA sourced from IMDb.
+
+        English-origin shows use IMDb's display title (when it differs from the TMDB title);
+        every other origin uses IMDb's romanized original title (its ``aka``), never TMDB's
+        native-language alternate. Suppressed when it just echoes the title.
+        """
+        imdb_info = meta.imdb_info if isinstance(meta.imdb_info, dict) else {}
+        original_language = str(meta.original_language or "").strip().lower()
+        original_language = original_language.split("-")[0].split("(")[0].strip()
+        is_english = original_language in ("en", "eng", "english")
+        aka_source = imdb_info.get("title") if is_english else imdb_info.get("aka")
+        aka = str(aka_source or "").strip()
+        if not aka:
+            return ""
+        if aka.lower() == tmdb_title.lower() or aka.lower() in tmdb_title.lower():
+            return ""
+        return f"AKA {aka}"
+
+    async def _tv_title_needs_year(self, meta: Meta, title: str | None = None) -> bool:
+        title = str(title if title is not None else (meta.title or "")).strip()
+        api_key = str(self.config.get("DEFAULT", {}).get("tmdb_api", "")).strip()
+        if not title or not api_key:
+            return False
+        try:
+            logger.info(f"{self.tracker}: Checking if TMDb has multiple shows with the title '{title}'...")
+            async with httpx.AsyncClient() as client:
+                response = await client.get(
+                    "https://api.themoviedb.org/3/search/tv",
+                    params={"api_key": api_key, "query": title, "language": "en-US", "include_adult": "true"},
+                )
+                response.raise_for_status()
+                payload_raw: Any = response.json()
+        except (httpx.HTTPError, ValueError, TypeError):
+            return False
+
+        title_key = " ".join(title.casefold().split())
+        current_id = str(meta.tmdb_id or "")
+        payload = cast(dict[str, Any], payload_raw) if isinstance(payload_raw, dict) else {}
+        results_raw: Any = payload.get("results", [])
+        results = cast(list[Any], results_raw) if isinstance(results_raw, list) else []
+        matching_ids: set[str] = set()
+        for result_raw in results:
+            if not isinstance(result_raw, dict):
+                continue
+            result = cast(dict[str, Any], result_raw)
+            names = (result.get("name"), result.get("original_name"))
+            if any(" ".join(str(candidate or "").casefold().split()) == title_key for candidate in names):
+                matching_ids.add(str(result.get("id", "")))
+        matching_ids.discard("")
+        return bool(matching_ids - {current_id}) if current_id else len(matching_ids) > 1
 
     async def get_additional_checks(self, meta: Meta) -> bool:
         if meta.resolution not in ["4320p", "2160p", "1440p", "1080p", "1080i"]:
