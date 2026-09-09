@@ -1,6 +1,9 @@
 name: Create and publish Docker images
 
 on:
+  push:
+    branches:
+      - development
   release:
     types:
       - published
