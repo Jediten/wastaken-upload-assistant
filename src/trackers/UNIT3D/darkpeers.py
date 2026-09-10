@@ -89,6 +89,7 @@ class DarkPeers(UNIT3D):
         "VXT",
         "WAF",
         "WKS",
+        "XDMovies",
         "X0r",
         "YIFY",
         "YTS",
