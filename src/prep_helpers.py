@@ -204,6 +204,7 @@ def init_meta(prep_instance: Any, meta: Meta, mode: str) -> tuple[bool, bool, Cl
     meta.we_asked_tvmaze = False
     meta.audio_languages = None
     meta.subtitle_languages = None
+    meta.language_checked = False
     meta.aither_trumpable = None
     meta.anime = False
     meta.subtitle_files = cast(list[str], [])
