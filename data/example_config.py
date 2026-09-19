@@ -195,6 +195,21 @@ config: dict[str, Any] = {
         "skip_auto_torrent_personalrelease": False,
         # Set to True to prefer torrents with a piece size of 16 MiB or less when searching configured clients.
         "prefer_max_16_torrent": False,
+        # Before hashing with mkbrr, reuse a .torrent that already sits in the content's own
+        # directory (matched by file layout + total size). Set False to disable.
+        "search_torrent_dir": True,
+        # Optional extra directories to scan for a reusable .torrent (list of paths).
+        "torrent_dir_search": [],
+        # Before hashing with mkbrr, search the trackers you are on (any with an api_key) for the
+        # release and reuse a validated .torrent. Set False to disable.
+        "search_trackers_for_torrent": True,
+        # Restrict the tracker search to a specific set of tracker names (list). Empty = every
+        # tracker you have an api_key configured for.
+        "search_torrent_trackers": [],
+        # Fraction the tracker-reported size may differ from the local total before a candidate is
+        # downloaded (0 = exact, with a small container/metadata allowance). The real check is the
+        # file-layout validation applied after download.
+        "search_torrent_size_tolerance": 0.0,
         # Import policy for releases found on other trackers. Choose one:
         # - "ids": import only IMDb/TMDb/TVDb/MAL IDs and related release metadata.
         # - "images": import IDs, metadata, and validated description screenshots, but no text.
