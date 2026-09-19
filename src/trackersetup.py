@@ -150,6 +150,7 @@ STATIC_AUTH_TYPES = {
     "TORRENTLEECH": "other_api",
     "TOTHEGLORY": "cookies",
     "TVCHAOSUK": "other_api",
+    "TORRENTHAVEN": "unit3d_api",
     "ULCX": "unit3d_api",
     "UTOPIA": "unit3d_api",
     "XINGYUNGEPT": "cookies",
@@ -456,29 +457,27 @@ class TrackerSetup:
         if "taoe" in group_tags:
             group_tags = "taoe"
 
-        if tracker.upper() in ("AITHER", "CAPYBARABR", "LST", "LUMINARR", "SPEEDAPP", "ZENITH"):
+        if tracker.upper() in ("AITHER", "CAPYBARABR", "DARKPEERS", "LST", "LUMINARR", "SPEEDAPP", "ZENITH"):
             file_path = await self.get_banned_groups(meta, tracker)
             if file_path == "empty":
                 logger.info(f"[bold red]No banned groups found for '{tracker}'.")
                 return False
             if not file_path:
-                logger.info(f"[bold red]Failed to load banned groups for '{tracker}'.")
-                return False
+                # API unreachable: fall back to the tracker's bundled banned_groups list.
+                logger.info(f"[bold red]Failed to load banned groups for '{tracker}'; using bundled list.")
+            else:
+                # Load the banned groups from the file
+                try:
+                    content = await asyncio.to_thread(self._read_file, file_path)
+                    data = json.loads(content)
+                    banned_groups = data.get("banned_groups", "")
+                    if banned_groups:
+                        banned_group_list = banned_groups.split(", ")
 
-            # Load the banned groups from the file
-            try:
-                content = await asyncio.to_thread(self._read_file, file_path)
-                data = json.loads(content)
-                banned_groups = data.get("banned_groups", "")
-                if banned_groups:
-                    banned_group_list = banned_groups.split(", ")
-
-            except FileNotFoundError:
-                logger.info(f"[bold red]Banned group file for '{tracker}' not found.")
-                return False
-            except json.JSONDecodeError:
-                logger.info(f"[bold red]Failed to parse banned group file for '{tracker}'.")
-                return False
+                except FileNotFoundError:
+                    logger.info(f"[bold red]Banned group file for '{tracker}' not found; using bundled list.")
+                except json.JSONDecodeError:
+                    logger.info(f"[bold red]Failed to parse banned group file for '{tracker}'; using bundled list.")
 
         for tag in banned_group_list:
             if isinstance(tag, list):
@@ -1486,6 +1485,7 @@ tracker_class_map: Any = LazyTrackerDict(
         "THELEACHZONE": ("src.trackers.UNIT3D.tlzdigital", "TheLeachZone"),
         "THEOLDSCHOOL": ("src.trackers.UNIT3D.theoldschool", "TheOldSchool"),
         "TORRENTEROS": ("src.trackers.UNIT3D.torrenteros", "Torrenteros"),
+        "TORRENTHAVEN": ("src.trackers.UNIT3D.torrenthaven", "TorrentHaven"),
         "TORRENTHR": ("src.trackers.UNIT3D.torrenthr", "TorrentHR"),
         "TORRENTLEECH": ("src.trackers.torrentleech", "TorrentLeech"),
         "TOTHEGLORY": ("src.trackers.totheglory", "ToTheGlory"),

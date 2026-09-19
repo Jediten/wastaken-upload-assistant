@@ -94,6 +94,7 @@ class DarkPeers(UNIT3D):
         "YIFY",
         "YTS",
     )
+    banned_url = f"{base_url}/api/banned-groups"
     id_url = f"{base_url}/api/torrents/"
     upload_url = f"{base_url}/api/torrents/upload"
     requests_url = f"{base_url}/api/requests/filter"
@@ -255,8 +256,10 @@ class DarkPeers(UNIT3D):
         accepted = self._accepted_languages()
         valid = bool(audio & accepted) or (bool(original) and original in audio and bool(subtitles & accepted))
         if not valid:
-            logger.info(f"{self.tracker}: [bold red]requires English/Nordic audio, or original audio with English/Nordic subtitles. Skipping upload.")
-        return valid
+            return await self._confirm_or_skip(
+                "requires English/Nordic audio, or original audio with English/Nordic subtitles.", meta
+            )
+        return True
 
     async def validate_video_resolution(self, meta: Meta) -> bool:
         resolution = str(meta.resolution or "")
