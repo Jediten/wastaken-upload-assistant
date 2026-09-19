@@ -32,6 +32,9 @@ custom_hooks
 custom_hooks/
 data/*.json
 data/banned/*.*
+data/session_key
+data/session_secret
+data/sessions/
 data/cache/*
 data/cache/metadata/*
 data/cache/tracker_metadata/*
