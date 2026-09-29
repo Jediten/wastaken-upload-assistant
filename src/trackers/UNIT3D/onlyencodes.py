@@ -2,10 +2,14 @@
 import re
 from typing import Any, cast
 
+from src.console import logger
+from src.get_desc import DescriptionBuilder
 from src.languages import languages_manager
 from src.meta import Meta
 from src.rehostimages import ImageHostPolicy, RehostImagesManager
+from src.tracker_images import get_tracker_image_collection
 from src.trackers.common import Common
+from src.trackers.naming import add_incomplete_pack_marker
 from src.trackers.UNIT3D import UNIT3D
 
 Config = dict[str, Any]
@@ -185,10 +189,40 @@ class OnlyEncodes(UNIT3D):
         if not self.common.check_and_confirm_adult_media_upload(meta, self.tracker):
             return False
 
+        if int(meta.screens or 0) < 3:
+            logger.info(f"{self.tracker}: [bold yellow]At least 3 full-screen screenshots are required. Skipping upload.[/bold yellow]")
+            return False
+
         return not (
             meta.is_disc != "BDMV"
             and not await self.common.check_language_requirements(meta, self.tracker, languages_to_check=["english"], check_audio=True, check_subtitle=True)
         )
+
+    async def get_description(self, meta: Meta) -> dict[str, str]:
+        screenshots = get_tracker_image_collection(meta, self.tracker, "screenshots") or []
+        linked_screenshots = [image for image in screenshots if isinstance(image, dict) and image.get("web_url") and (image.get("raw_url") or image.get("img_url"))]
+        if len(linked_screenshots) < 3:
+            raise ValueError(f"{self.tracker}: At least 3 hosted, linked screenshots are required")
+
+        builder = DescriptionBuilder(self.tracker, self.config)
+        # OnlyEncodes requires linked medium thumbnails from the first episode or
+        # movie. Keep these overrides local so other trackers retain user settings.
+        builder.tracker_config = {
+            **builder.tracker_config,
+            "add_logo": False,
+            "multiScreens": 0,
+            "thumbnail_size": 350,
+            "pack_thumb_size": 350,
+        }
+        return {
+            "description": await builder.general_description_generator(
+                meta,
+                logo=False,
+                mediainfo=False,
+                nfo=False,
+                approved_image_hosts=list(self.approved_image_hosts),
+            )
+        }
 
     async def get_name(self, meta: Meta) -> dict[str, str]:
         oe_name = meta.name
@@ -236,7 +270,11 @@ class OnlyEncodes(UNIT3D):
         uuid_value = meta.basename_no_ext
         scale = "DS4K" if "DS4K" in uuid_value.upper() else "RM4K" if "RM4K" in uuid_value.upper() else ""
         if name_type in ["ENCODE", "WEBDL", "WEBRIP"] and scale != "":
-            oe_name = oe_name.replace(f"{resolution}", f"{scale}", 1)
+            if scale not in oe_name:
+                if resolution and resolution in oe_name:
+                    oe_name = oe_name.replace(f"{resolution}", f"{resolution} {scale}", 1)
+            elif resolution and f"{resolution} {scale}" not in oe_name:
+                oe_name = oe_name.replace(scale, f"{resolution} {scale}", 1)
 
         tag_value = meta.tag or ""
         tag_lower = tag_value.lower()
@@ -246,7 +284,7 @@ class OnlyEncodes(UNIT3D):
                 oe_name = re.sub(f"-{invalid_tag}", "", oe_name, flags=re.IGNORECASE)
             oe_name = f"{oe_name}-NOGRP"
 
-        return {"name": oe_name}
+        return {"name": add_incomplete_pack_marker(oe_name, meta, self.tracker)}
 
     async def get_type_id(self, meta: Meta, type: str | None = None, reverse: bool = False, mapping_only: bool = False) -> dict[str, str]:
         video_codec = meta.video_codec if meta.video_codec is not None else "N/A"

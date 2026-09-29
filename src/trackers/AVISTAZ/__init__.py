@@ -22,6 +22,7 @@ from src.languages import languages_manager
 from src.meta import Meta
 from src.temp_paths import screenshots_dir
 from src.trackers.common import Common
+from src.trackers.naming import add_incomplete_pack_marker
 
 Config = dict[str, Any]
 
@@ -856,14 +857,17 @@ class AZTrackerBase:
                 # Use the season-specific year if found, otherwise fall back to meta year
                 if season_year:
                     year_to_use = season_year
-                if year_to_use:
-                    upload_name = upload_name.replace(meta.title, f"{meta.title} {year_to_use}", 1)
+                if year_to_use and (self.tracker != "AVISTAZ" or meta.tv_pack):
+                    if self.tracker == "AVISTAZ":
+                        title_and_season = rf"{re.escape(meta.title)}\s+S\d{{2}}"
+                        upload_name, matched = re.subn(title_and_season, lambda match: f"{match.group()} ({year_to_use})", upload_name, count=1)
+                        if not matched:
+                            upload_name = upload_name.replace(meta.title, f"{meta.title} ({year_to_use})", 1)
+                    else:
+                        upload_name = upload_name.replace(meta.title, f"{meta.title} {year_to_use}", 1)
 
             if self.tracker == "PRIVATEHD" and year_to_use:
                 upload_name = upload_name.replace(str(year_to_use), "")
-
-            if self.tracker == "AVISTAZ" and meta.tv_pack and year_to_use:
-                upload_name = upload_name.replace(f"{meta.title} {year_to_use} {meta.season}", f"{meta.title} {meta.season} {year_to_use}")
 
         source = meta.source
         audio = meta.audio
@@ -883,7 +887,7 @@ class AZTrackerBase:
                 codec_suffix = f" {video_codec}" if video_codec else ""
                 upload_name = upload_name.replace(audio, f"{audio}{codec_suffix}")
 
-        return re.sub(r"\s{2,}", " ", upload_name)
+        return add_incomplete_pack_marker(re.sub(r"\s{2,}", " ", upload_name), meta, self.tracker)
 
     def get_rip_type(self, meta: Meta, display_name: bool = False) -> str:
         # Translation from meta keywords to site display labels
@@ -1032,7 +1036,7 @@ class AZTrackerBase:
 
         issue = self.check_data(meta, data)
         if issue:
-            meta.tracker_status[self.tracker] = f"data error - {issue}"
+            meta.tracker_status[self.tracker]["status_message"] = f"data error - {issue}"
             return False
         if not meta.debug:
             response = await self.session.post(self.upload_url_step2, data=data)

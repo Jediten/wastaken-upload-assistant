@@ -13,6 +13,7 @@ from src.meta import Meta
 from src.music.models import MusicRelease
 from src.music.validation import MusicValidator, ValidationLevel
 from src.tmdb import TmdbManager, get_tmdb_localized_data
+from src.trackers.naming import add_incomplete_pack_marker
 from src.trackers.UNIT3D import UNIT3D
 
 
@@ -133,7 +134,7 @@ class DarkPeers(UNIT3D):
             if (
                 meta.keep_folder
                 and (category == "MOVIE" or not self._is_single_tv_season(meta))
-                and not await self._confirm_or_skip("does not allow an individual video file in an unnecessary folder.", meta)
+                and not self._reject("does not allow an individual video file in an unnecessary folder.")
             ):
                 return False
 
@@ -256,9 +257,7 @@ class DarkPeers(UNIT3D):
         accepted = self._accepted_languages()
         valid = bool(audio & accepted) or (bool(original) and original in audio and bool(subtitles & accepted))
         if not valid:
-            return await self._confirm_or_skip(
-                "requires English/Nordic audio, or original audio with English/Nordic subtitles.", meta
-            )
+            return self._reject("requires English/Nordic audio, or original audio with English/Nordic subtitles.")
         return True
 
     async def validate_video_resolution(self, meta: Meta) -> bool:
@@ -267,7 +266,7 @@ class DarkPeers(UNIT3D):
         if resolution in allowed:
             return True
         if resolution == "360p":
-            return await self._confirm_or_skip("only permits 360p when no official higher-resolution release exists.", meta)
+            return self._reject("only permits 360p when no official higher-resolution release exists.")
         logger.info(f"{self.tracker}: [bold red]does not support {resolution or 'an unknown'} video resolution. Skipping upload.")
         return False
 
@@ -298,7 +297,7 @@ class DarkPeers(UNIT3D):
     async def validate_book(self, meta: Meta) -> bool:
         author = str(meta.author or meta.book_author or "").strip()
         if not author:
-            return await self._missing_required("author", meta)
+            return self._missing_required("author")
         format_name = self._book_format(meta)
         allowed = self._AUDIOBOOK_FORMATS if meta.audiobook else self._BOOK_FORMATS
         if format_name not in allowed:
@@ -307,14 +306,14 @@ class DarkPeers(UNIT3D):
         identifier = self._book_identifier(meta)
         is_collection = len(meta.filelist or []) > 1 or "collection" in str(meta.name or "").casefold()
         if not identifier and not is_collection:
-            return await self._missing_required("a valid ISBN/ASIN", meta)
+            return self._missing_required("a valid ISBN/ASIN")
         publisher = str(meta.publisher or meta.book_publisher or "").strip()
         if not publisher:
-            return await self._missing_required("publisher", meta)
+            return self._missing_required("publisher")
         if meta.audiobook and not str(meta.narrator or "").strip():
-            return await self._missing_required("audiobook narrator", meta)
+            return self._missing_required("audiobook narrator")
         if not meta.audiobook and format_name == "PDF" and not bool(meta.get("page_count", None) or meta.get("book_page_count", None)):
-            return await self._missing_required("PDF page count", meta)
+            return self._missing_required("PDF page count")
         return True
 
     @staticmethod
@@ -375,20 +374,15 @@ class DarkPeers(UNIT3D):
             return False
         instructions = " ".join(str(value or "") for value in (meta.description, meta.description_file_content, meta.description_link_content, meta.description_nfo_content))
         if not re.search(r"\b(?:install(?:ation)?|setup|usage|instructions?)\b", instructions, re.IGNORECASE):
-            return await self._missing_required("installation and usage instructions", meta)
+            return self._missing_required("installation and usage instructions")
         return True
 
-    async def _missing_required(self, field: str, meta: Meta) -> bool:
-        if meta.unattended and not meta.unattended_confirm:
-            logger.info(f"{self.tracker}: [bold red]missing required {field}. Skipping unattended upload.")
-            return False
-        return await self._confirm_or_skip(f"is missing required {field}; confirm it is present in the final description.", meta)
+    def _missing_required(self, field: str) -> bool:
+        return self._reject(f"is missing required {field}; confirm it is present in the final description.")
 
-    async def _confirm_or_skip(self, message: str, meta: Meta) -> bool:
+    def _reject(self, message: str) -> bool:
         logger.info(f"{self.tracker}: [bold red]{message}[/bold red]")
-        if meta.unattended:
-            return bool(meta.unattended_confirm)
-        return await self.common.prompt_user_for_confirmation("Do you want to upload anyway?", meta)
+        return False
 
     async def get_additional_data(self, meta: Meta) -> dict[str, Any]:
         return {
@@ -453,7 +447,7 @@ class DarkPeers(UNIT3D):
         if audio and audio != "SKIPPED" and "Dual-Audio" in dp_name:
             dp_name = dp_name.replace("Dual-Audio", audio)
 
-        return {"name": dp_name}
+        return {"name": add_incomplete_pack_marker(dp_name, meta, self.tracker)}
 
     async def _tv_name(self, meta: Meta, name: str) -> str:
         tmdb_title = await self._tmdb_en_title(meta)

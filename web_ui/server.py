@@ -16,6 +16,7 @@ import queue
 import re
 import secrets
 import shlex
+import sqlite3
 import subprocess
 import sys
 import threading
@@ -24,6 +25,7 @@ import urllib.parse
 import weakref
 from contextlib import suppress
 from datetime import datetime, timedelta, UTC
+from functools import wraps
 from types import ModuleType
 from pathlib import Path
 from typing import Any, Literal, Protocol, TypedDict, cast
@@ -36,6 +38,8 @@ import web_ui.auth as auth_mod
 from src.webui_progress import PROGRESS_STDOUT_PREFIX
 from src.prompt_sound import PROMPT_SOUND_STDOUT_MARKER
 from src.app_paths import CODE_DIR, DATA_DIR, STATE_DIR
+from src.args import cli_argument_catalog, tracker_cli_aliases
+from src.config_sync import ConfigSyncError, ConfigWriteConflict, config_write_lock, replace_config_source
 from src.external_tools import EXTERNAL_TOOL_KEYS, check_external_tools
 from src.meta import Meta
 from src.version import __version__
@@ -1042,21 +1046,20 @@ def _token_is_valid(token: str) -> bool:
 
 
 def _validate_upload_assistant_args(args: Sequence[object]) -> list[str]:
-    """Validate upload-assistant arguments to avoid command-injection.
+    """Validate upload-assistant arguments before passing them as argv values.
 
-    Rejects arguments containing nulls, newlines, or common shell metacharacters.
-    Returns the original args if they pass validation, otherwise raises ValueError.
+    The WebUI launches the controller without a shell, so shell punctuation is
+    valid data. Keep rejecting controls and arguments that are unsafe or
+    unsupported for the WebUI.
     """
     safe_args: list[str] = []
-    # Disallow characters that enable shell injection or command chaining.
-    forbidden = set(";&|$`><*?~!\n\r\x00")
     for a in args:
         if not isinstance(a, str):
             raise ValueError("Invalid arg type")
         if a == "--paths-from-stdin":
             raise ValueError("--paths-from-stdin is only available in CLI mode")
-        if any(ch in a for ch in forbidden):
-            raise ValueError("Invalid characters in arg")
+        if any(ord(ch) < 32 or ord(ch) == 127 for ch in a):
+            raise ValueError("Invalid control character in arg")
         # Disallow arguments that are just parent-directory references
         if a == ".." or a == ".":
             raise ValueError("Invalid arg")
@@ -1274,6 +1277,7 @@ def _spawn_webui_upload_process(command: list[str], base_dir: Path, env: dict[st
     return (
         subprocess.Popen(  # lgtm[py/command-line-injection]  # noqa: S603
             command,
+            shell=False,
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
@@ -1378,6 +1382,16 @@ def _stringify_preview_value(value: object) -> str:
 def _stringify_optional_id(value: object) -> str:
     text = _stringify_preview_value(value)
     return "" if text in {"", "0"} else text
+
+
+def _extract_preview_imdb_id(meta_data: Mapping[str, object]) -> str:
+    """Format IMDb title IDs without losing zeros or truncating newer IDs."""
+    for key in ("imdb_id", "imdb_tt", "imdb"):
+        value = _stringify_optional_id(meta_data.get(key))
+        match = re.fullmatch(r"(?:tt)?([0-9]+)", value, re.IGNORECASE)
+        if match and match[1].strip("0"):
+            return f"tt{match[1].zfill(7)}"
+    return ""
 
 
 def _set_process_awaiting_input(session_id: str, waiting: bool, input_type: str = "text") -> None:
@@ -1516,6 +1530,221 @@ def _string_list_preview_values(value: object) -> list[str]:
     return results
 
 
+def _format_preview_size(value: object) -> str:
+    """Return a compact binary size for a positive byte count."""
+    try:
+        size = int(value)
+    except TypeError, ValueError:
+        return ""
+    if size <= 0:
+        return ""
+    units = ("B", "KiB", "MiB", "GiB", "TiB")
+    amount = float(size)
+    for unit in units:
+        if amount < 1024 or unit == units[-1]:
+            precision = 0 if unit == "B" else 1
+            return f"{amount:.{precision}f} {unit}"
+        amount /= 1024
+    return ""
+
+
+def _preview_mapping_values(value: object) -> str:
+    if not isinstance(value, Mapping):
+        return ""
+    return ", ".join(
+        f"{_stringify_preview_value(key)}: {_stringify_preview_value(item)}" for key, item in value.items() if _stringify_preview_value(key) and _stringify_preview_value(item)
+    )
+
+
+def _preview_detail_item(key: str, label: str, value: object) -> dict[str, str] | None:
+    if isinstance(value, Mapping):
+        text = _preview_mapping_values(value)
+    elif isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
+        text = ", ".join(_string_list_preview_values(value))
+    else:
+        text = _stringify_preview_value(value)
+    if not text:
+        return None
+    return {"key": key, "label": label, "value": text}
+
+
+def _preview_detail_section(key: str, label: str, rows: Sequence[tuple[str, str, object]]) -> dict[str, object] | None:
+    items = [item for item_key, item_label, value in rows if (item := _preview_detail_item(item_key, item_label, value))]
+    if not items:
+        return None
+    return {"key": key, "label": label, "items": items}
+
+
+def _extract_preview_detail_sections(meta_data: Mapping[str, object], music: Mapping[str, object]) -> list[dict[str, object]]:
+    """Build ordered, display-safe detail groups for the execution preview."""
+    category = _stringify_preview_value(meta_data.get("category")).upper()
+    filelist = meta_data.get("filelist")
+    file_count = len(filelist) if isinstance(filelist, Sequence) and not isinstance(filelist, (str, bytes, bytearray)) else 0
+    video_codec = _stringify_preview_value(meta_data.get("video_codec")) or _stringify_preview_value(meta_data.get("video_encode"))
+
+    sections: list[dict[str, object]] = []
+    media_section = _preview_detail_section(
+        "media",
+        "Media",
+        (
+            ("type", "Type", meta_data.get("type")),
+            ("source", "Source", meta_data.get("source")),
+            ("resolution", "Resolution", meta_data.get("resolution")),
+            ("container", "Container", meta_data.get("container")),
+            ("video_codec", "Video", video_codec),
+            ("audio", "Audio", meta_data.get("audio")),
+            ("audio_languages", "Audio Languages", meta_data.get("audio_languages")),
+            ("subtitle_languages", "Subtitles", meta_data.get("subtitle_languages")),
+            ("size", "Size", _format_preview_size(meta_data.get("source_size"))),
+            ("files", "Files", file_count or ""),
+        ),
+    )
+    if media_section:
+        sections.append(media_section)
+
+    if category == "MOVIE":
+        category_section = _preview_detail_section(
+            "movie",
+            "Movie Details",
+            (
+                ("release_date", "Release Date", meta_data.get("release_date")),
+                ("edition", "Edition", meta_data.get("edition")),
+                ("directors", "Director", meta_data.get("directors")),
+                ("studios", "Studio", meta_data.get("studios")),
+                ("cast", "Cast", meta_data.get("cast")),
+                ("original_language", "Original Language", meta_data.get("original_language")),
+                ("country", "Country", meta_data.get("origin_country") or meta_data.get("origin_country_code")),
+            ),
+        )
+    elif category == "TV":
+        episode = _stringify_preview_value(meta_data.get("episode_title")) or _stringify_preview_value(meta_data.get("episode_name"))
+        episode_code = "".join(
+            value for value in (_stringify_preview_value(meta_data.get("season")), _stringify_preview_value(meta_data.get("episode"))) if value not in {"", "0"}
+        )
+        episode_display = " — ".join(value for value in (episode_code, episode) if value)
+        tv_pack_raw = _stringify_preview_value(meta_data.get("tv_pack")).lower()
+        package = "Season Pack" if tv_pack_raw not in ("", "0", "false", "none", "null") else "Single Episode"
+        category_section = _preview_detail_section(
+            "tv",
+            "TV Details",
+            (
+                ("episode", "Episode", episode_display),
+                ("package", "Package", package),
+                ("season_name", "Season", meta_data.get("season_name") or meta_data.get("tvdb_season_name")),
+                ("air_date", "Air Date", meta_data.get("episode_airdate")),
+                ("service", "Service", meta_data.get("service_longname")),
+                ("networks", "Network", meta_data.get("networks")),
+            ),
+        )
+    elif category == "BOOK":
+        series = _stringify_preview_value(meta_data.get("book_series"))
+        series_index = _stringify_preview_value(meta_data.get("book_series_index"))
+        series_display = f"{series} #{series_index}" if series and series_index else series
+        bitrate = _stringify_preview_value(meta_data.get("audiobook_bitrate"))
+        if bitrate.isdigit():
+            bitrate = f"{bitrate} kbps"
+        category_section = _preview_detail_section(
+            "book",
+            "Book Details",
+            (
+                ("author", "Author", meta_data.get("author") or meta_data.get("book_author")),
+                ("narrator", "Narrator", meta_data.get("narrator")),
+                ("translator", "Translator", meta_data.get("book_translator")),
+                ("series", "Series", series_display),
+                ("publisher", "Publisher", meta_data.get("publisher") or meta_data.get("book_publisher")),
+                ("service", "Service", meta_data.get("service_longname") or meta_data.get("service")),
+                ("language", "Language", meta_data.get("book_language")),
+                ("isbn", "ISBN", meta_data.get("isbn") or meta_data.get("book_isbn")),
+                ("asin", "ASIN", meta_data.get("asin") or meta_data.get("book_asin")),
+                ("format", "Format", "Audiobook" if bool(meta_data.get("audiobook")) else "Book"),
+                ("duration", "Duration", meta_data.get("audiobook_duration_formatted")),
+                ("bitrate", "Bitrate", bitrate),
+            ),
+        )
+    elif category == "MUSIC":
+
+        def music_value(name: str, source_name: str = "") -> str:
+            value = _stringify_preview_value(music.get(name))
+            source = _stringify_preview_value(music.get(source_name)) if source_name else ""
+            return f"{value} ({source})" if value and source else value
+
+        track_count = _stringify_preview_value(music.get("track_count"))
+        disc_count = _stringify_preview_value(music.get("disc_count"))
+        tracks_discs = f"{track_count or '?'} / {disc_count or '1'}" if track_count or disc_count else ""
+        release = " • ".join(
+            value
+            for value in (
+                _stringify_preview_value(music.get("release_year")),
+                _stringify_preview_value(music.get("retail_date")),
+                _stringify_preview_value(music.get("release_label")),
+                _stringify_preview_value(music.get("release_catalogue_number")),
+            )
+            if value
+        )
+        edition = " • ".join(value for value in (_stringify_preview_value(music.get("edition")), _stringify_preview_value(music.get("edition_year"))) if value)
+        category_section = _preview_detail_section(
+            "music",
+            "Music Details",
+            (
+                ("artist", "Artist", music_value("artist", "artist_source")),
+                ("album", "Album", music_value("album", "album_source")),
+                ("original_year", "Original Year", music_value("original_year", "year_source")),
+                ("release_type", "Release Type", music_value("release_type", "release_type_source")),
+                ("media", "Media", music_value("media", "media_source")),
+                ("technical", "Technical", music.get("technical")),
+                ("tracks_discs", "Tracks / Discs", tracks_discs),
+                ("release", "This Release", release),
+                ("edition", "Edition", edition),
+                ("auxiliary", "Auxiliary Files", music.get("auxiliary")),
+                ("conflicts", "Metadata Conflicts", music.get("conflicts")),
+            ),
+        )
+    elif category == "GAME":
+        edition = " • ".join(
+            value
+            for value in (
+                _stringify_preview_value(meta_data.get("game_release_edition")),
+                _stringify_preview_value(meta_data.get("game_release_edition_year")),
+            )
+            if value
+        )
+        category_section = _preview_detail_section(
+            "game",
+            "Game Details",
+            (
+                ("platform", "Platform", meta_data.get("platform")),
+                ("release_type", "Release Type", meta_data.get("game_subcategory") or meta_data.get("game_release_type")),
+                ("version", "Version", meta_data.get("game_version")),
+                ("edition", "Edition", edition),
+                ("developer", "Developer", meta_data.get("developer")),
+                ("publisher", "Publisher", meta_data.get("publisher")),
+                ("region", "Region", meta_data.get("game_region")),
+                ("system", "System", meta_data.get("game_system")),
+                ("release_date", "Release Date", meta_data.get("igdb_first_release_date")),
+                ("engines", "Engine", meta_data.get("game_engines")),
+                ("modes", "Modes", meta_data.get("game_modes")),
+                ("age_ratings", "Age Rating", meta_data.get("game_age_ratings")),
+            ),
+        )
+    elif category == "XXX":
+        category_section = _preview_detail_section(
+            "xxx",
+            "Release Details",
+            (
+                ("publisher", "Studio / Publisher", meta_data.get("publisher")),
+                ("studios", "Studio", meta_data.get("studios")),
+                ("release_date", "Release Date", meta_data.get("release_date")),
+                ("performers", "Performers", meta_data.get("cast")),
+            ),
+        )
+    else:
+        category_section = None
+
+    if category_section:
+        sections.append(category_section)
+    return sections
+
+
 def _book_cover_from_meta(meta_data: Mapping[str, object], preview_session_id: str) -> str:
     covers_value = meta_data.get("covers")
     if isinstance(covers_value, Sequence) and not isinstance(covers_value, (str, bytes, bytearray)):
@@ -1606,13 +1835,15 @@ def _resolve_execution_preview_meta(session_id: str) -> tuple[str, Path | None, 
     return execution_path, None, None
 
 
-def _subprocess_prompt_type(buffer: str) -> str | None:
+def _subprocess_prompt_type(buffer: str, previous_type: str | None = None) -> str | None:
     last_line = buffer.splitlines()[-1] if buffer else ""
     stripped = re.sub(r"\x1b\[[0-?]*[ -/]*[@-~]", "", last_line).strip()
     if not stripped:
         return None
     if stripped.startswith(PROGRESS_STDOUT_PREFIX):
         return None
+    if stripped == ">":
+        return previous_type or "text"
     lowered = stripped.lower()
     if "running:" in lowered:
         return None
@@ -1634,6 +1865,7 @@ def _webui_subprocess_env() -> dict[str, str]:
     env["UA_WEBUI_FORCE_COLOR"] = "1"
     env["UA_WEBUI_PROGRESS_STDOUT"] = "1"
     env["UA_WEBUI_PROMPT_SOUND_STDOUT"] = "1"
+    env["UA_STATS_SOURCE"] = "webui"
     return env
 
 
@@ -1648,8 +1880,14 @@ def _subprocess_progress_event(chunk: str) -> dict[str, object] | None:
     return event if isinstance(event, dict) else None
 
 
-def _should_flush_subprocess_output(buffer: str, char: str) -> bool:
-    return char == "\n" or (len(buffer) > 512 and not buffer.lstrip().startswith(PROGRESS_STDOUT_PREFIX))
+def _should_flush_subprocess_output(buffer: str, char: str, *, idle: bool = False) -> bool:
+    if char == "\n" or (len(buffer) > 512 and not buffer.lstrip().startswith(PROGRESS_STDOUT_PREFIX)):
+        return True
+    # Wait for a pause in output before flushing unterminated prompts. Checking
+    # each character would split ordinary lines at their first colon/question mark.
+    if idle and not re.search(r"\x1b(?:\[[0-?]*[ -/]*)?$", buffer):
+        return _subprocess_prompt_type(buffer) is not None
+    return False
 
 
 def _append_metadata_source(
@@ -1682,12 +1920,13 @@ def _extract_metadata_sources(meta_data: Mapping[str, object]) -> list[MetadataS
 
     category = _stringify_preview_value(meta_data.get("category")).upper()
     tmdb_value = _stringify_optional_id(meta_data.get("tmdb_id")) or _stringify_optional_id(meta_data.get("tmdb"))
-    imdb_value = _stringify_optional_id(meta_data.get("imdb_id")) or _stringify_optional_id(meta_data.get("imdb_tt")) or _stringify_optional_id(meta_data.get("imdb"))
+    imdb_value = _extract_preview_imdb_id(meta_data)
     tvdb_value = _stringify_optional_id(meta_data.get("tvdb_id")) or _stringify_optional_id(meta_data.get("tvdb"))
     tvmaze_value = _stringify_optional_id(meta_data.get("tvmaze_id")) or _stringify_optional_id(meta_data.get("tvmaze"))
     mal_value = _stringify_optional_id(meta_data.get("mal_id")) or _stringify_optional_id(meta_data.get("mal"))
     douban_value = _stringify_optional_id(meta_data.get("douban_id"))
     igdb_value = _stringify_optional_id(meta_data.get("igdb_id"))
+    igdb_url = _stringify_preview_value(meta_data.get("igdb_url"))
     steam_url = _stringify_preview_value(meta_data.get("steam_url"))
     openlibrary_value = (
         _stringify_preview_value(meta_data.get("openlibrary"))
@@ -1695,6 +1934,8 @@ def _extract_metadata_sources(meta_data: Mapping[str, object]) -> list[MetadataS
         or _stringify_preview_value(meta_data.get("openlibrary_book_id"))
     )
     isbn_value = _stringify_preview_value(meta_data.get("isbn"))
+    asin_value = _stringify_preview_value(meta_data.get("asin")) or _stringify_preview_value(meta_data.get("book_asin"))
+    audible_url = _stringify_preview_value(meta_data.get("audible_url"))
 
     sources: list[MetadataSource] = []
     seen_keys: set[str] = set()
@@ -1711,14 +1952,13 @@ def _extract_metadata_sources(meta_data: Mapping[str, object]) -> list[MetadataS
         )
 
     if category in {"MOVIE", "TV"} and imdb_value:
-        imdb_id = imdb_value if imdb_value.startswith("tt") else f"tt{imdb_value}"
         _append_metadata_source(
             sources,
             seen_keys,
             "imdb",
             "IMDb",
-            imdb_id,
-            f"https://www.imdb.com/title/{quote(imdb_id)}/",
+            imdb_value,
+            f"https://www.imdb.com/title/{quote(imdb_value)}/",
         )
 
     if category == "TV" and tvdb_value:
@@ -1769,7 +2009,7 @@ def _extract_metadata_sources(meta_data: Mapping[str, object]) -> list[MetadataS
             "igdb",
             "IGDB",
             igdb_value,
-            f"https://www.igdb.com/search?type=1&q={quote(igdb_value)}",
+            igdb_url if _is_http_url(igdb_url) else f"https://www.igdb.com/search?type=1&q={quote(igdb_value)}",
         )
 
     if category == "GAME" and steam_url:
@@ -1802,6 +2042,16 @@ def _extract_metadata_sources(meta_data: Mapping[str, object]) -> list[MetadataS
             "google_books",
             "Google Books",
             isbn_value,
+        )
+
+    if category == "BOOK" and asin_value:
+        _append_metadata_source(
+            sources,
+            seen_keys,
+            "audible",
+            "Audible",
+            asin_value,
+            audible_url if _is_http_url(audible_url) else "",
         )
 
     if category == "MUSIC":
@@ -1945,6 +2195,130 @@ def _music_preview_from_meta(meta_data: Mapping[str, object]) -> dict[str, objec
     }
 
 
+def _preview_media_track_value(track: Mapping[str, object], *keys: str) -> str:
+    """Return the first useful MediaInfo value across common key variants."""
+    for key in keys:
+        value = track.get(key)
+        # Missing MediaInfo fields may be saved as empty dictionaries.
+        text = _stringify_preview_value(value) if isinstance(value, (str, int, float)) else ""
+        if text:
+            return text
+
+    folded = {str(key).casefold(): value for key, value in track.items()}
+    for key in keys:
+        value = folded.get(key.casefold())
+        text = _stringify_preview_value(value) if isinstance(value, (str, int, float)) else ""
+        if text:
+            return text
+
+    return ""
+
+
+def _preview_track_flag(track: Mapping[str, object], *keys: str) -> bool:
+    value = _preview_media_track_value(track, *keys).strip().casefold()
+    return value in {"yes", "true", "1", "y"}
+
+
+def _extract_preview_media_tracks(
+    meta_data: Mapping[str, object],
+) -> tuple[list[dict[str, object]], list[dict[str, object]]]:
+    """Extract display-safe audio and subtitle tracks from saved MediaInfo data."""
+    mediainfo = meta_data.get("mediainfo")
+    raw_tracks: list[Mapping[str, object]] = []
+
+    if isinstance(mediainfo, Mapping):
+        media = mediainfo.get("media")
+        if isinstance(media, Mapping):
+            tracks = media.get("track")
+            if isinstance(tracks, Sequence) and not isinstance(tracks, (str, bytes, bytearray)):
+                raw_tracks.extend(track for track in tracks if isinstance(track, Mapping))
+
+        if not raw_tracks:
+            for key in ("tracks", "track"):
+                tracks = mediainfo.get(key)
+                if isinstance(tracks, Sequence) and not isinstance(tracks, (str, bytes, bytearray)):
+                    raw_tracks.extend(track for track in tracks if isinstance(track, Mapping))
+                    if raw_tracks:
+                        break
+    elif isinstance(mediainfo, Sequence) and not isinstance(mediainfo, (str, bytes, bytearray)):
+        raw_tracks.extend(track for track in mediainfo if isinstance(track, Mapping))
+
+    audio_tracks: list[dict[str, object]] = []
+    subtitle_tracks: list[dict[str, object]] = []
+
+    for track in raw_tracks:
+        track_type = _preview_media_track_value(
+            track,
+            "@type",
+            "track_type",
+            "TrackType",
+            "type",
+        ).casefold()
+
+        if track_type == "audio":
+            target = audio_tracks
+        elif track_type in {"text", "subtitle", "subtitles"}:
+            target = subtitle_tracks
+        else:
+            continue
+
+        title = _preview_media_track_value(track, "Title", "title", "TrackTitle")
+        language = _preview_media_track_value(
+            track,
+            "Language_String",
+            "Language",
+            "language",
+            "Language_String1",
+        )
+        format_name = _preview_media_track_value(
+            track,
+            "Format_Commercial_IfAny",
+            "Format",
+            "format",
+            "CodecID",
+            "codec_id",
+            "codec",
+        )
+        channels = _preview_media_track_value(
+            track,
+            "ChannelLayout",
+            "ChannelLayout_Original",
+            "Channels",
+            "channels",
+            "Channel(s)",
+        )
+        bitrate = _preview_media_track_value(
+            track,
+            "BitRate_String",
+            "BitRate",
+            "bitrate",
+            "bit_rate",
+        )
+        if bitrate.isdigit():
+            bitrate = f"{round(int(bitrate) / 1000)} kbps"
+
+        service_kind = _preview_media_track_value(track, "ServiceKind", "service_kind")
+        hearing_impaired = _preview_track_flag(track, "HearingImpaired", "hearing_impaired")
+        commentary = "commentary" in title.casefold() or "commentary" in service_kind.casefold()
+
+        target.append(
+            {
+                "index": len(target) + 1,
+                "language": language,
+                "title": title,
+                "format": format_name,
+                "channels": channels,
+                "bitrate": bitrate,
+                "default": _preview_track_flag(track, "Default", "default"),
+                "forced": _preview_track_flag(track, "Forced", "forced"),
+                "hearing_impaired": hearing_impaired,
+                "commentary": commentary,
+            }
+        )
+
+    return audio_tracks, subtitle_tracks
+
+
 def _extract_execution_preview(meta_data: Mapping[str, object], fallback_path: str, preview_session_id: str = "") -> ExecutionPreview:
     title = _stringify_preview_value(meta_data.get("title")) or _stringify_preview_value(meta_data.get("name"))
     original_title = _stringify_preview_value(meta_data.get("original_title"))
@@ -1965,12 +2339,14 @@ def _extract_execution_preview(meta_data: Mapping[str, object], fallback_path: s
     if not poster_url and tmdb_poster:
         poster_url = tmdb_poster if tmdb_poster.startswith("http") else f"https://image.tmdb.org/t/p/w500{tmdb_poster}"
     music = _music_preview_from_meta(meta_data)
+    detail_sections = _extract_preview_detail_sections(meta_data, music)
     genres = _string_list_preview_values(meta_data.get("genres")) or list(music.get("genres", []))
     networks = _string_list_preview_values(meta_data.get("networks"))
     audiobook_bitrate = _stringify_preview_value(meta_data.get("audiobook_bitrate"))
     if audiobook_bitrate.isdigit():
         audiobook_bitrate = f"{audiobook_bitrate} kbps"
     tv_pack_raw = _stringify_preview_value(meta_data.get("tv_pack")).lower()
+    audio_tracks, subtitle_tracks = _extract_preview_media_tracks(meta_data)
 
     return {
         "media_id": _stringify_preview_value(meta_data.get("uuid")) or fallback_path,
@@ -1984,7 +2360,7 @@ def _extract_execution_preview(meta_data: Mapping[str, object], fallback_path: s
         "source": _stringify_preview_value(meta_data.get("source")),
         "resolution": _stringify_preview_value(meta_data.get("resolution")),
         "tmdb": _stringify_optional_id(meta_data.get("tmdb_id")) or _stringify_optional_id(meta_data.get("tmdb")),
-        "imdb": (_stringify_optional_id(meta_data.get("imdb_id")) or _stringify_optional_id(meta_data.get("imdb_tt")) or _stringify_optional_id(meta_data.get("imdb"))),
+        "imdb": _extract_preview_imdb_id(meta_data),
         "metadata_sources": _extract_metadata_sources(meta_data),
         "poster_url": poster_url,
         "overview": _stringify_preview_value(meta_data.get("overview")),
@@ -1992,7 +2368,9 @@ def _extract_execution_preview(meta_data: Mapping[str, object], fallback_path: s
         "name": _stringify_preview_value(meta_data.get("name")),
         "status": "ready",
         "audio": _stringify_preview_value(meta_data.get("audio")),
-        "service": _stringify_preview_value(meta_data.get("service_longname")),
+        "audio_tracks": audio_tracks,
+        "subtitle_tracks": subtitle_tracks,
+        "service": _stringify_preview_value(meta_data.get("service_longname") or meta_data.get("service")),
         "networks": networks,
         "season": _stringify_preview_value(meta_data.get("season")),
         "episode": _stringify_preview_value(meta_data.get("episode")),
@@ -2016,6 +2394,7 @@ def _extract_execution_preview(meta_data: Mapping[str, object], fallback_path: s
         "game_system": _stringify_preview_value(meta_data.get("game_system")),
         "developer": _stringify_preview_value(meta_data.get("developer")),
         "music": music,
+        "detail_sections": detail_sections,
         "awaiting_input": False,
         "input_type": None,
     }
@@ -2069,6 +2448,8 @@ def _find_execution_preview(session_id: str) -> ExecutionPreview | None:
         "name": "",
         "status": "waiting",
         "audio": "",
+        "audio_tracks": [],
+        "subtitle_tracks": [],
         "service": "",
         "networks": [],
         "season": "",
@@ -2093,6 +2474,7 @@ def _find_execution_preview(session_id: str) -> ExecutionPreview | None:
         "game_system": "",
         "developer": "",
         "music": {},
+        "detail_sections": [],
         "awaiting_input": bool(process_info.get("awaiting_input")),
         "input_type": process_info.get("input_type"),
         "progress": _progress_items_for_process(process_info),
@@ -2234,6 +2616,18 @@ class MetadataSource(TypedDict, total=False):
     url: str
 
 
+class PreviewDetailItem(TypedDict):
+    key: str
+    label: str
+    value: str
+
+
+class PreviewDetailSection(TypedDict):
+    key: str
+    label: str
+    items: list[PreviewDetailItem]
+
+
 class ProgressItem(TypedDict, total=False):
     id: str
     label: str
@@ -2268,6 +2662,8 @@ class ExecutionPreview(TypedDict, total=False):
     name: str
     status: str
     audio: str
+    audio_tracks: list[dict[str, object]]
+    subtitle_tracks: list[dict[str, object]]
     service: str
     networks: list[str]
     season: str
@@ -2292,6 +2688,7 @@ class ExecutionPreview(TypedDict, total=False):
     game_system: str
     developer: str
     music: dict[str, object]
+    detail_sections: list[PreviewDetailSection]
     awaiting_input: bool
     input_type: str | None
     progress: list[ProgressItem]
@@ -2421,7 +2818,7 @@ def _require_auth_for_webui():  # pyright: ignore[reportUnusedFunction]
         return None
     if _webui_auth_configured() and _webui_auth_ok():
         return None
-    if request.path == "/config" or request.path in ("/", "/index.html"):
+    if request.path in {"/config", "/stats", "/", "/index.html"}:
         return redirect(url_for("login_page"))
 
     return None
@@ -2537,6 +2934,27 @@ def set_runtime_browse_roots(browse_roots: str) -> None:
     _runtime_browse_roots = browse_roots
 
 
+def _parse_config_source(source: str) -> dict[str, Any]:
+    """Read literal configuration without executing Python from the file."""
+    tree = ast.parse(source)
+    for node in ast.walk(tree):
+        config_node: ast.expr | None = None
+        if isinstance(node, ast.Assign):
+            for target in node.targets:
+                if isinstance(target, ast.Name) and target.id == "config":
+                    config_node = node.value
+                    break
+        elif isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name) and node.target.id == "config":
+            config_node = node.value
+
+        if config_node is not None:
+            config_value = ast.literal_eval(config_node)
+            if isinstance(config_value, dict):
+                config_value_dict = cast(dict[Any, Any], config_value)
+                return {str(key): value for key, value in config_value_dict.items()}
+    raise ValueError("Config assignment not found")
+
+
 def _load_config_from_file(path: Path) -> dict[str, Any] | None:
     """Load and return the ``config`` dict from a Python config file.
 
@@ -2567,27 +2985,7 @@ def _load_config_from_file(path: Path) -> dict[str, Any] | None:
     try:
         with Path(path).open(encoding="utf-8") as f:
             content = f.read()
-        tree = ast.parse(content)
-        for node in ast.walk(tree):
-            config_node: ast.expr | None = None
-            if isinstance(node, ast.Assign):
-                for target in node.targets:
-                    if isinstance(target, ast.Name) and target.id == "config":
-                        config_node = node.value
-                        break
-            elif isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name) and node.target.id == "config":
-                config_node = node.value
-
-            if config_node is not None:
-                config_value = ast.literal_eval(config_node)
-                if isinstance(config_value, dict):
-                    config_value_dict = cast(dict[Any, Any], config_value)
-                    result: dict[str, Any] = {}
-                    for key, value in config_value_dict.items():
-                        result[str(key)] = value
-                    return result
-        console.print(f"[yellow]Config file {path.name} does not contain a valid 'config' dict assignment.[/yellow]")
-        return None
+        return _parse_config_source(content)
     except Exception as exc:
         console.print(f"[yellow]Failed to parse config file {path.name}: {exc}[/yellow]")
         return None
@@ -2855,7 +3253,13 @@ def _replace_config_value_in_source(source: str, key_path: list[str], new_value:
 
                 # Reconstruct the source with the new key using proper formatting
                 return _format_config_tree(tree)
-            raise ValueError(f"Key not found in config: {key}")
+            # Sparse user configs may omit an entire example-backed section.
+            # Build its parents in the staged AST, without replacing scalars.
+            new_dict_node = ast.Dict(keys=[], values=[])
+            current_dict.keys.append(ast.Constant(value=key))
+            current_dict.values.append(new_dict_node)
+            current_dict = new_dict_node
+            continue
 
         if target_node is not None and i < len(key_path) - 1:
             raise ValueError("Invalid path for config update")
@@ -2945,9 +3349,7 @@ _RELEASE_GROUP_OVERRIDE_FIELDS = (
 
 def _is_release_group_override_path(path: list[str]) -> bool:
     """Identify the complete DEFAULT or tracker-specific release-group mapping."""
-    return path == ["DEFAULT", "tag_overrides"] or (
-        len(path) == 3 and path[0] == "TRACKERS" and path[2] == "tag_overrides"
-    )
+    return path == ["DEFAULT", "tag_overrides"] or (len(path) == 3 and path[0] == "TRACKERS" and path[2] == "tag_overrides")
 
 
 def _validate_release_group_overrides(value: object) -> None:
@@ -2979,9 +3381,17 @@ def _build_config_items(
     items: list[ConfigItem] = []
     user_dict: dict[str, Any] = _as_dict(user_section) or {}
 
+    if path == ["DEFAULT"]:
+        from src.screenshot_overlays import OVERLAY_KEYS, overlay_enabled, overlay_options
+
+        # Resolve old combined settings and individual-only configurations using
+        # the same rules as capture. Reading settings never rewrites the config.
+        if "frame_overlay" in user_dict or any(key in user_dict for key in OVERLAY_KEYS):
+            user_dict = {**user_dict, **overlay_options(user_dict), "frame_overlay": overlay_enabled(user_dict)}
+
     merged_keys: list[str] = [str(key) for key in example_section]
-    if user_section:
-        merged_keys.extend([str(key) for key in user_section if key not in example_section])
+    if user_dict:
+        merged_keys.extend([str(key) for key in user_dict if key not in example_section])
     if len(path) == 2 and path[0] == "TRACKERS" and "tag_overrides" not in merged_keys:
         merged_keys.append("tag_overrides")
 
@@ -3003,6 +3413,9 @@ def _build_config_items(
         subsection_items = []
 
     for key in merged_keys:
+        # Legacy configs can retain removed settings after default synchronization.
+        if path == ["DEFAULT"] and key == "keep_meta":
+            continue
         example_value = example_section.get(key)
         user_value = user_dict.get(key)
         key_path = [*path, key]
@@ -3020,10 +3433,7 @@ def _build_config_items(
                 "source": "config" if key in user_dict else "example",
                 "children": [],
                 "help": help_text or comments_map.get("DEFAULT/tag_overrides", []),
-                "override_fields": [
-                    {"key": field, "help": comments_map.get(f"DEFAULT/{field}", [])}
-                    for field in _RELEASE_GROUP_OVERRIDE_FIELDS
-                ],
+                "override_fields": [{"key": field, "help": comments_map.get(f"DEFAULT/{field}", [])} for field in _RELEASE_GROUP_OVERRIDE_FIELDS],
             }
         elif isinstance(example_value, Mapping) or isinstance(user_value, Mapping):
             example_value = _as_dict(example_value) or {}
@@ -3137,6 +3547,13 @@ def _prepare_default_webui_section(
             prepared[client_key] = default_value
             comments_map.setdefault(f"DEFAULT/{client_key}", help_text)
             subsection_map[f"DEFAULT/{client_key}"] = "CLIENT SELECTION"
+
+    if "stats_enabled" in prepared:
+        # Group statistics with Main Settings only for WebUI presentation.
+        # Keep the fields together so the builder emits a single subsection.
+        subsection_map["DEFAULT/stats_enabled"] = "MAIN SETTINGS"
+        main_settings = {key: value for key, value in prepared.items() if subsection_map.get(f"DEFAULT/{key}") == "MAIN SETTINGS"}
+        prepared = {**main_settings, **prepared}
 
     return prepared
 
@@ -3491,6 +3908,7 @@ def index():
             "index.html",
             app_version=APP_VERSION,
             csrf_token=_ensure_csrf_token(),
+            cli_arguments=cli_argument_catalog(),
         )
     except Exception as e:
         console.print(f"Error loading template: {e}", markup=False)
@@ -3579,7 +3997,9 @@ def login_page():
 
 @app.errorhandler(429)
 def _rate_limit_exceeded(_e: Exception) -> Any:
-    # Return a minimal plain-text 429 response to avoid heavy template rendering.
+    # API callers expect JSON; keep non-API responses lightweight as well.
+    if request.path.startswith("/api/"):
+        return jsonify({"success": False, "error": "Too many requests. Please wait before trying again."}), 429
     return Response("Too many requests", status=429, mimetype="text/plain")
 
 
@@ -3757,11 +4177,80 @@ def config_page():
         return "<pre>Internal server error</pre>", 500
 
 
+@app.route("/stats")
+def stats_page():
+    """Serve the privacy-preserving statistics dashboard."""
+    if not _is_authenticated():
+        return redirect(url_for("login_page"))
+    return render_template("stats.html", app_version=APP_VERSION, csrf_token=_ensure_csrf_token())
+
+
+def _add_stats_destination_display_names(payload: dict[str, Any]) -> None:
+    """Add catalogue-backed labels without changing persisted destination keys."""
+    from src.trackersetup import tracker_class_map
+
+    rows = payload.get("uploads", {}).get("by_destination", [])
+    filter_rows = payload.get("filters", {}).get("destinations", [])
+    for row in [*rows, *filter_rows]:
+        destination = str(row.get("destination") or "")
+        tracker_class = tracker_class_map.get(destination.upper())
+        row["display_name"] = str(getattr(tracker_class, "display_name", destination))
+    for node in payload.get("sankey", {}).get("nodes", []):
+        destination = str(node.get("destination") or "")
+        if destination:
+            tracker_class = tracker_class_map.get(destination.upper())
+            node["label"] = str(getattr(tracker_class, "display_name", destination))
+
+
 @app.route("/api/health")
 @limiter.exempt
 def health():
     """Health check endpoint"""
     return jsonify({"status": "healthy", "success": True, "message": "Upload-Assistant Web UI is running"})
+
+
+@app.route("/api/stats", methods=["GET", "DELETE"])
+def stats_api():
+    """Read or reset local aggregate statistics for an authenticated browser."""
+    if not _is_authenticated() or _get_bearer_from_header():
+        return jsonify({"success": False, "error": "Authentication required (web session)"}), 401
+    if not _verify_csrf_header() or not _verify_same_origin():
+        return jsonify({"success": False, "error": "CSRF/Origin validation failed"}), 403
+
+    from src.stats import get_empty_stats, get_stats, reset_stats, stats_collection_enabled
+
+    if request.method == "DELETE":
+        body = _request_json_dict()
+        if body.get("confirmation") != "RESET":
+            return jsonify({"success": False, "error": "Type RESET to confirm"}), 400
+        try:
+            return jsonify({"success": True, "reset_at": reset_stats(STATE_DIR)})
+        except OSError, sqlite3.Error:
+            return jsonify({"success": False, "error": "Unable to reset statistics"}), 500
+
+    period = str(request.args.get("range", "30d"))
+    mode = str(request.args.get("mode", "real"))
+    date_from = request.args.get("from")
+    date_to = request.args.get("to")
+    tracker = str(request.args.get("tracker", ""))
+    time_basis = str(request.args.get("timezone", "utc"))
+    local_date = request.args.get("today")
+    try:
+        config = _load_config_from_file(STATE_DIR / "data" / "config.py") or {}
+        enabled = stats_collection_enabled(config)
+        stats_kwargs = {
+            "date_from": date_from,
+            "date_to": date_to,
+            "tracker": tracker,
+            "time_basis": time_basis,
+            "local_date": local_date,
+        }
+        payload = get_stats(period, mode, STATE_DIR, **stats_kwargs) if enabled else get_empty_stats(period, mode, **stats_kwargs)
+        _add_stats_destination_display_names(payload)
+        payload["enabled"] = enabled
+        return jsonify(payload)
+    except ValueError as exc:
+        return jsonify({"success": False, "error": str(exc)}), 400
 
 
 @app.route("/api/update_status")
@@ -4340,6 +4829,7 @@ _TRACKER_CONFIGURATION_KEYS = frozenset(
         "ApiUser",
         "bhd_rss_key",
         "bioma_api_key",
+        "image_host_api_key",
         "ptgen_api",
     }
 )
@@ -4511,6 +5001,14 @@ def _configured_cookie_tracker_names(
             configured.add(tracker_name.upper())
 
     return configured
+
+
+def _tracker_codebase(tracker_name: str) -> str | None:
+    """Expose the framework registered for a tracker."""
+    from src.trackersetup import get_tracker_framework
+
+    framework = get_tracker_framework(tracker_name) or ""
+    return {"UNIT3D": "UNIT3D", "GAZELLE": "Gazelle", "NEXUSPHP": "NexusPHP", "AVISTAZ": "AvistaZ"}.get(framework)
 
 
 def _tracker_destination_type(tracker_class: Any) -> str:
@@ -4740,6 +5238,7 @@ def get_trackers():
         default_trackers_list = [t.strip().upper() for t in default_trackers_val.split(",") if t.strip()]
     elif isinstance(default_trackers_val, list):
         default_trackers_list = [str(t).strip().upper() for t in default_trackers_val if str(t).strip()]
+    default_trackers_list = [Meta.canonical_tracker_name(name) for name in default_trackers_list]
 
     cookie_trackers: set[str] = set()
     try:
@@ -4763,6 +5262,8 @@ def get_trackers():
     )
 
     trackers_data = []
+    from src.api_key_expiry import get_api_key_expiry
+
     for tracker_name, tracker_class in tracker_class_map.items():
         display_name = getattr(tracker_class, "display_name", tracker_name)
         base_url = getattr(tracker_class, "base_url", "")
@@ -4770,6 +5271,9 @@ def get_trackers():
         optional_setup_keys = sorted(str(key) for key in (getattr(tracker_class, "optional_setup_keys", ()) or ()))
         destination_type = _tracker_destination_type(tracker_class)
         supported_categories = _tracker_supported_categories(tracker_class)
+        expiry_supported = bool(getattr(tracker_class, "api_key_expiry_supported", False))
+        tracker_config = trackers_section.get(tracker_name, {})
+        api_key = str(tracker_config.get("api_key") or "").strip() if isinstance(tracker_config, dict) else ""
         favicon_url = ""
         static_dir = Path(__file__).parent / "static"
         for ext in ["png", "svg", "ico"]:
@@ -4782,10 +5286,13 @@ def get_trackers():
             {
                 "name": tracker_name,
                 "display_name": display_name,
+                "codebase": _tracker_codebase(tracker_name),
                 "base_url": base_url,
                 "favicon": favicon_url,
                 "configured": tracker_name.upper() in configured_trackers,
                 "credential_source": ("prowlarr" if tracker_name.upper() in prowlarr_sources else "local" if tracker_name.upper() in configured_trackers else None),
+                "api_key_expiry_supported": expiry_supported,
+                "api_key_expiry": get_api_key_expiry(tracker_name, api_key, base_url, STATE_DIR) if expiry_supported else None,
                 "auth_type": auth_type,
                 "optional_setup_keys": optional_setup_keys,
                 "cookie_configured": tracker_name.upper() in cookie_trackers,
@@ -4796,7 +5303,102 @@ def get_trackers():
 
     trackers_data.sort(key=lambda x: x["display_name"].lower())
 
-    return jsonify({"success": True, "default_trackers": default_trackers_list, "trackers": trackers_data})
+    aliases = Meta.tracker_name_aliases()
+    alias_error = ""
+    try:
+        aliases.update({alias: Meta.canonical_tracker_name(name) for alias, name in tracker_cli_aliases(user_config).items()})
+    except ValueError as error:
+        # A malformed manual edit must not hide the configuration/selector UI.
+        alias_error = str(error)
+    return jsonify({"success": True, "default_trackers": default_trackers_list, "trackers": trackers_data, "tracker_aliases": aliases, "alias_error": alias_error})
+
+
+@app.route("/api/tracker_api_key_status", methods=["POST"])
+@limiter.limit("120 per hour", key_func=_rate_limit_key_func)
+def tracker_api_key_status():
+    """Read cached expiry or explicitly check a saved/draft tracker API key."""
+    if not _is_authenticated():
+        return jsonify({"success": False, "error": "Authentication required (web session)"}), 401
+    if not _verify_csrf_header() or not _verify_same_origin():
+        return jsonify({"success": False, "error": "CSRF/Origin validation failed"}), 403
+
+    import httpx
+
+    from src.api_key_expiry import get_api_key_expiry, record_api_key_expiry
+    from src.prowlarr import ProwlarrError, configured_prowlarr, fetch_prowlarr_credentials
+    from src.trackersetup import tracker_class_map
+
+    data = _request_json_dict()
+    tracker = str(data.get("tracker") or "").strip().upper()
+    tracker_class = tracker_class_map.get(tracker)
+    if not tracker_class or not getattr(tracker_class, "api_key_expiry_supported", False):
+        return jsonify({"success": False, "error": "API key expiry checks are not supported for this tracker"}), 400
+    config = _load_config_from_file(STATE_DIR / "data" / "config.py") or {}
+    if "api_key" in data:
+        api_key = data["api_key"]
+    else:
+        trackers_config = config.get("TRACKERS")
+        tracker_config = trackers_config.get(tracker) if isinstance(trackers_config, Mapping) else None
+        api_key = tracker_config.get("api_key", "") if isinstance(tracker_config, Mapping) else ""
+    if not isinstance(api_key, str) or "\r" in api_key or "\n" in api_key:
+        return jsonify({"success": False, "error": "Enter a valid API key"}), 400
+    api_key = api_key.strip()
+    source = "local"
+    refresh = data.get("refresh") is True
+    if not api_key and refresh:
+        try:
+            if connection := configured_prowlarr(config):
+                report = fetch_prowlarr_credentials(*connection, {tracker})
+                credential = report.credentials.get(tracker)
+                api_key = credential.api_key if credential else ""
+                source = "prowlarr"
+        except ProwlarrError as error:
+            return jsonify({"success": False, "error": str(error)}), 400
+    base_url = tracker_class.base_url
+    if not refresh:
+        return jsonify({"success": True, "expiry": get_api_key_expiry(tracker, api_key, base_url, STATE_DIR)})
+    if not api_key:
+        return jsonify({"success": False, "error": "Enter an API key or configure a Prowlarr credential source"}), 400
+
+    # Use the existing search endpoint/permissions, not /user's additional
+    # account-information permission. The destination comes from UA's tracker
+    # definition; draft config cannot redirect a credential to another host.
+    try:
+        with httpx.Client(timeout=10.0, follow_redirects=False) as client:
+            response = client.get(
+                tracker_class.search_url,
+                headers={"Authorization": f"Bearer {api_key}", "Accept": "application/json"},
+                params={"perPage": 1},
+            )
+            response.raise_for_status()
+            payload = response.json()
+        if not isinstance(payload, dict) or payload.get("success") is False:
+            return jsonify({"success": False, "error": "The tracker returned an unsuccessful API response"}), 400
+        observed = record_api_key_expiry(tracker, api_key, base_url, response, STATE_DIR, payload=payload)
+    except httpx.HTTPStatusError as error:
+        code = error.response.status_code
+        message = (
+            "The tracker rejected the API key. It may be invalid, revoked or expired."
+            if code == 401
+            else "The tracker denied the API request. Check the key's search/download permissions and account access."
+            if code == 403
+            else f"The tracker returned HTTP {code}. Try again later."
+        )
+        return jsonify({"success": False, "error": message}), 400
+    except httpx.RequestError:
+        return jsonify({"success": False, "error": "The tracker could not be reached. Try again later."}), 400
+    except ValueError:
+        return jsonify({"success": False, "error": "The tracker did not return a valid JSON API response"}), 400
+
+    expiry = observed or get_api_key_expiry(tracker, api_key, base_url, STATE_DIR)
+    return jsonify(
+        {
+            "success": True,
+            "expiry": expiry,
+            "credential_source": source,
+            "message": "API key accepted." if observed else "API key accepted, but expiry was not reported. Any date shown is the last observed expiry.",
+        }
+    )
 
 
 @app.route("/api/config_test_prowlarr", methods=["POST"])
@@ -4842,14 +5444,33 @@ def config_test_prowlarr():
     )
 
 
-@app.route("/api/config_set_tracker_overrides", methods=["POST"])
-def config_set_tracker_overrides():
-    """Enable or remove the example-backed DEFAULT override block for a tracker."""
-    if not _is_authenticated():
-        return jsonify({"success": False, "error": "Authentication required (web session)"}), 401
-    if not _verify_csrf_header() or not _verify_same_origin():
-        return jsonify({"success": False, "error": "CSRF/Origin validation failed"}), 403
+def _config_write_route(view: Callable[..., Any]) -> Callable[..., Any]:
+    """Guard and serialize every WebUI config writer with startup synchronization."""
 
+    @wraps(view)
+    def guarded(*args: Any, **kwargs: Any) -> Any:
+        if not _is_authenticated():
+            return jsonify({"success": False, "error": "Authentication required (web session)"}), 401
+        if not _verify_csrf_header() or not _verify_same_origin():
+            return jsonify({"success": False, "error": "CSRF/Origin validation failed"}), 403
+        try:
+            with config_write_lock(STATE_DIR / "data" / "config.py"):
+                return view(*args, **kwargs)
+        except ConfigWriteConflict as error:
+            return jsonify({"success": False, "error": str(error)}), 409
+        except (ValueError, SyntaxError, UnicodeError) as error:
+            return jsonify({"success": False, "error": f"Configuration file could not be parsed: {error}"}), 400
+        except (ConfigSyncError, OSError) as error:
+            console.print(f"Failed to save configuration safely: {error}", markup=False)
+            return jsonify({"success": False, "error": "Unable to save configuration safely. Pending changes are kept; please try again."}), 500
+
+    return guarded
+
+
+@app.route("/api/config_set_tracker_overrides", methods=["POST"])
+@_config_write_route
+def config_set_tracker_overrides():
+    """Enable tracker DEFAULT overrides or retain their keys with inherited values."""
     data = _request_json_dict()
     tracker_name = str(data.get("tracker", "")).strip().upper()
     enabled = data.get("enabled")
@@ -4866,34 +5487,33 @@ def config_set_tracker_overrides():
         return jsonify({"success": False, "error": "Unknown tracker"}), 404
     example_tracker = _as_dict(example_trackers.get(actual_example_name)) or {}
     override_keys = [key for key in _TRACKER_DEFAULT_OVERRIDE_KEYS if key in example_tracker]
-    if not override_keys:
-        return jsonify({"success": False, "error": "This tracker has no DEFAULT override block"}), 400
-
     config_path = STATE_DIR / "data" / "config.py"
-    user_config = _load_config_from_file(config_path) or {}
+    original_bytes = config_path.read_bytes()
+    source = original_bytes.decode("utf-8")
+    user_config = _parse_config_source(source)
     user_trackers = _as_dict(user_config.get("TRACKERS")) or {}
     actual_user_name = next(
         (str(name) for name in user_trackers if str(name).upper() == tracker_name),
         actual_example_name,
     )
+    if not enabled:
+        saved_tracker = _as_dict(user_trackers.get(actual_user_name)) or {}
+        override_keys = [key for key in _TRACKER_DEFAULT_OVERRIDE_KEYS if key in example_tracker or key in saved_tracker]
+    if not override_keys:
+        return jsonify({"success": False, "error": "This tracker has no DEFAULT override block"}), 400
 
     try:
-        source = config_path.read_text(encoding="utf-8")
-        if enabled:
-            if not isinstance(user_config.get("TRACKERS"), Mapping):
-                source = _replace_config_value_in_source(source, ["TRACKERS"], "{}")
-            if not isinstance(user_trackers.get(actual_user_name), Mapping):
-                source = _replace_config_value_in_source(source, ["TRACKERS", actual_user_name], "{}")
-            for key in override_keys:
-                source = _replace_config_value_in_source(
-                    source,
-                    ["TRACKERS", actual_user_name, key],
-                    _python_literal(example_tracker[key]),
-                )
-        else:
-            for key in override_keys:
-                source = _remove_config_key_in_source(source, ["TRACKERS", actual_user_name, key])
-        config_path.write_text(source, encoding="utf-8")
+        if not isinstance(user_config.get("TRACKERS"), Mapping):
+            source = _replace_config_value_in_source(source, ["TRACKERS"], "{}")
+        if not isinstance(user_trackers.get(actual_user_name), Mapping):
+            source = _replace_config_value_in_source(source, ["TRACKERS", actual_user_name], "{}")
+        for key in override_keys:
+            source = _replace_config_value_in_source(
+                source,
+                ["TRACKERS", actual_user_name, key],
+                _python_literal(example_tracker[key] if enabled else None),
+            )
+        replace_config_source(config_path, source, original_bytes)
         try:
             _write_audit_log(
                 "set_tracker_default_overrides",
@@ -4904,6 +5524,8 @@ def config_set_tracker_overrides():
             )
         except Exception as audit_error:
             console.print(f"Failed to write config audit record: {audit_error}", markup=False)
+    except ConfigSyncError:
+        raise
     except Exception as error:
         console.print(f"Failed to update tracker DEFAULT overrides: {error}", markup=False)
         return jsonify({"success": False, "error": "An error occurred while updating tracker overrides"}), 500
@@ -4918,36 +5540,22 @@ def config_set_tracker_overrides():
     )
 
 
-@app.route("/api/config_update", methods=["POST"])
-def config_update():
-    """Update a config value in data/config.py"""
-    # Require authenticated web session and CSRF protection; disallow bearer/basic API auth
-    if not _is_authenticated():
-        return jsonify({"success": False, "error": "Authentication required (web session)"}), 401
-    # Require CSRF + same-origin for config updates
-    if not _verify_csrf_header() or not _verify_same_origin():
-        return jsonify({"success": False, "error": "CSRF/Origin validation failed"}), 403
-    data = _request_json_dict()
+def _apply_config_update(source: str, example_config: dict[str, Any], data: dict[str, Any]) -> tuple[str, dict[str, Any]]:
+    """Validate and stage one edit without writing any changes to disk."""
+    prior_config = _parse_config_source(source)
     path_raw = data.get("path", [])
     path: list[str] = []
-    if isinstance(path_raw, Sequence) and not isinstance(path_raw, (str, bytes, bytearray)):
-        path_items: Sequence[Any] = cast(Sequence[Any], path_raw)
-        path.extend(p for p in path_items if isinstance(p, str) and p)
+    if isinstance(path_raw, list) and all(isinstance(part, str) and part for part in path_raw):
+        path = list(path_raw)
     raw_value = data.get("value")
 
     if not path:
-        return jsonify({"success": False, "error": "Invalid path"}), 400
+        raise ValueError("Invalid path")
 
-    base_dir = STATE_DIR
-    example_path = CODE_DIR / "data" / "example_config.py"
-    config_path = base_dir / "data" / "config.py"
-
-    example_config = _load_config_from_file(example_path) or {}
     example_value = _get_nested_value(example_config, path)
 
     if example_value is None and len(path) >= 3 and path[0] == "TORRENT_CLIENTS":
-        user_config_for_template = _load_config_from_file(config_path) or {}
-        user_client = _get_nested_value(user_config_for_template, path[:2])
+        user_client = _get_nested_value(prior_config, path[:2])
         example_clients = _as_dict(example_config.get("TORRENT_CLIENTS")) or {}
         user_client_config = _as_dict(user_client)
         if user_client_config:
@@ -4963,87 +5571,130 @@ def config_update():
     key = path[-1] if path else ""
     is_optional_arr_field = len(path) == 2 and path[0] == "DEFAULT" and re.fullmatch(r"(?:sonarr|radarr)_(?:url|api_key)_[1-3]", key) is not None
     force_remove_optional_arr_field = is_optional_arr_field and data.get("remove") is True
+    is_tracker_default_override = len(path) == 3 and path[0] == "TRACKERS" and key in _TRACKER_DEFAULT_OVERRIDE_KEYS
+    # Retain an explicit inheritance marker so startup sync cannot restore an
+    # example override. Accept removal requests from older WebUI tabs as well.
+    inherit_tracker_override = is_tracker_default_override and (raw_value is None or data.get("remove") is True)
+    if is_tracker_default_override and example_value is None and isinstance(_get_nested_value(example_config, path[:2]), Mapping):
+        # Existing overrides may outlive a field's entry in the tracker template.
+        # Keep those displayed fields editable/inheritable without adding new ones.
+        saved_tracker = _as_dict(_get_nested_value(prior_config, path[:2])) or {}
+        if key in saved_tracker:
+            example_value = _get_nested_value(example_config, ["DEFAULT", key])
+            if example_value is None:
+                example_value = saved_tracker[key] if saved_tracker[key] is not None else ""
     is_release_group_override = _is_release_group_override_path(path)
     if is_release_group_override:
         if not isinstance(_get_nested_value(example_config, path[:-1]), Mapping):
-            return jsonify({"success": False, "error": "Unknown release group override scope"}), 400
+            raise ValueError("Unknown release group override scope")
         example_value = {}
     elif key in ["injecting_client_list", "searching_client_list"]:
         example_value = []  # Default to empty list
     elif is_optional_arr_field:
         example_value = ""
     elif example_value is None:
-        return jsonify({"success": False, "error": "Path not found in example config"}), 400
+        raise ValueError("Path not found in example config")
 
-    coerced_value = _coerce_config_value(raw_value, example_value)
+    coerced_value = None if inherit_tracker_override else _coerce_config_value(raw_value, example_value)
+    overlay_choices = {"overlay_position": {"left", "right"}, "overlay_layout": {"stacked", "single_line"}}
+    if path[:1] == ["DEFAULT"] and len(path) == 2 and key in overlay_choices and (not isinstance(coerced_value, str) or coerced_value not in overlay_choices[key]):
+        raise ValueError(f"Invalid {key} value")
     if is_release_group_override:
-        try:
-            _validate_release_group_overrides(coerced_value)
-        except ValueError as error:
-            return jsonify({"success": False, "error": str(error)}), 400
+        _validate_release_group_overrides(coerced_value)
     new_value_literal = _python_literal(coerced_value)
 
     # Keep optional WebUI-managed values out of config.py when they are unused.
+    # Tracker overrides instead retain None to inherit subsequent DEFAULT changes.
     key = path[-1] if path else ""
     should_remove_empty_value = (key in ["injecting_client_list", "searching_client_list"] and coerced_value == []) or (
         is_optional_arr_field and (coerced_value == "" or force_remove_optional_arr_field)
     )
+    prior_value = _get_nested_value(prior_config, path)
     if should_remove_empty_value:
-        # Remove the key from config if it exists
-        try:
-            # Load prior value for audit
-            prior_config = _load_config_from_file(config_path) or {}
-            prior_value = _get_nested_value(prior_config, path)
+        updated_source = _remove_config_key_in_source(source, path)
+    else:
+        if len(path) == 2 and path[0] == "DEFAULT":
+            from src.screenshot_overlays import OVERLAY_KEYS, overlay_enabled, overlay_options
 
-            source = config_path.read_text(encoding="utf-8")
-            updated_source = _remove_config_key_in_source(source, path)
-            config_path.write_text(updated_source, encoding="utf-8")
-            # Audit record for removal
-            try:
-                _write_audit_log("remove_key", path, prior_value, None, True)
-            except Exception as ae:
-                console.print(f"Failed to write config audit record: {ae}", markup=False)
-        except Exception:
-            return jsonify({"success": False, "error": "An error occurred while updating the configuration"}), 500
-        return jsonify({"success": True, "value": _json_safe(coerced_value)})
-    # Else proceed with normal update
-
-    # Ensure prior_value is defined for the exception path below
-    prior_value = None
-    try:
-        # Load prior value for audit
-        prior_config = _load_config_from_file(config_path) or {}
-        prior_value = _get_nested_value(prior_config, path)
-
-        source = config_path.read_text(encoding="utf-8")
+            prior_defaults = _as_dict(prior_config.get("DEFAULT")) or {}
+            if key == "frame_overlay":
+                # Freeze legacy label preferences before changing the master so
+                # switching off and back on restores exactly the same selections.
+                for overlay_key, selected in overlay_options(prior_defaults).items():
+                    if overlay_key not in prior_defaults:
+                        source = _replace_config_value_in_source(source, ["DEFAULT", overlay_key], _python_literal(selected))
+            elif key in OVERLAY_KEYS and "frame_overlay" not in prior_defaults:
+                # Editing labels must preserve the master state shown in the UI,
+                # including configs that have never saved an explicit master.
+                source = _replace_config_value_in_source(source, ["DEFAULT", "frame_overlay"], _python_literal(overlay_enabled(prior_defaults)))
         updated_source = _replace_config_value_in_source(source, path, new_value_literal)
-        config_path.write_text(updated_source, encoding="utf-8")
-        # Audit record for update
+    return updated_source, {
+        "path": path,
+        "value": coerced_value,
+        "prior_value": prior_value,
+        "action": "remove_key" if should_remove_empty_value else "update_value",
+    }
+
+
+def _audit_config_updates(records: list[dict[str, Any]], success: bool, error: str | None = None) -> None:
+    for record in records:
         try:
-            _write_audit_log("update_value", path, prior_value, coerced_value, True)
-        except Exception as ae:
-            console.print(f"Failed to write config audit record: {ae}", markup=False)
-    except Exception as e:
-        # Attempt to log failed update attempt
-        try:
-            _write_audit_log("update_value", path, prior_value if prior_value is not None else None, coerced_value, False, str(e))
-        except Exception as ae:
-            console.print(f"Failed to write config audit failure record: {ae}", markup=False)
+            _write_audit_log(
+                record["action"],
+                record["path"],
+                record["prior_value"],
+                None if record["action"] == "remove_key" else record["value"],
+                success,
+                error,
+            )
+        except Exception as audit_error:
+            console.print(f"Failed to write config audit record: {audit_error}", markup=False)
+
+
+@app.route("/api/config_update", methods=["POST"])
+@_config_write_route
+def config_update():
+    """Save one field or a batch of field edits after staging every change."""
+    data = _request_json_dict()
+    is_batch = "updates" in data
+    updates = data.get("updates") if is_batch else [data]
+    if not isinstance(updates, list) or not 1 <= len(updates) <= 1000 or not all(isinstance(update, dict) for update in updates):
+        return jsonify({"success": False, "error": "Provide between 1 and 1000 configuration updates"}), 400
+
+    config_path = STATE_DIR / "data" / "config.py"
+    original_bytes = config_path.read_bytes()
+    source = original_bytes.decode("utf-8")
+    example_config = _load_config_from_file(CODE_DIR / "data" / "example_config.py") or {}
+    records: list[dict[str, Any]] = []
+    try:
+        for update in cast(list[dict[str, Any]], updates):
+            source, record = _apply_config_update(source, example_config, update)
+            records.append(record)
+        if any(record["path"][0] == "TRACKERS" and (len(record["path"]) <= 2 or record["path"][2] == "cli_alias") for record in records):
+            # Validate the final batch, so two aliases can be swapped together.
+            tracker_cli_aliases(_parse_config_source(source))
+        # A bad edit anywhere in the batch leaves the original file untouched.
+        replace_config_source(config_path, source, original_bytes)
+    except (ValueError, TypeError) as error:
+        return jsonify({"success": False, "error": str(error)}), 400
+    except ConfigSyncError as error:
+        _audit_config_updates(records, False, str(error))
+        raise
+    except Exception as error:
+        _audit_config_updates(records, False, str(error))
         return jsonify({"success": False, "error": "An error occurred while updating the configuration"}), 500
 
-    return jsonify({"success": True, "value": _json_safe(coerced_value)})
+    _audit_config_updates(records, True)
+    if is_batch:
+        return jsonify({"success": True, "values": [_json_safe(record["value"]) for record in records]})
+    return jsonify({"success": True, "value": _json_safe(records[0]["value"])})
 
 
 @app.route("/api/config_remove_subsection", methods=["POST"])
+@_config_write_route
 def config_remove_subsection():
     """Remove a subsection (top-level key) from the user's config.py if present"""
     # Require authenticated web session and CSRF protection; disallow bearer/basic API auth
-    if not _is_authenticated():
-        return jsonify({"success": False, "error": "Authentication required (web session)"}), 401
-    # Require CSRF + same-origin for config removal
-    if not _verify_csrf_header() or not _verify_same_origin():
-        return jsonify({"success": False, "error": "CSRF/Origin validation failed"}), 403
-
     data = _request_json_dict()
     path_raw = data.get("path", [])
     path: list[str] = []
@@ -5056,27 +5707,26 @@ def config_remove_subsection():
 
     base_dir = STATE_DIR
     config_path = base_dir / "data" / "config.py"
+    original_bytes = config_path.read_bytes()
+    source = original_bytes.decode("utf-8")
 
     try:
-        source = config_path.read_text(encoding="utf-8")
         updated = _remove_config_key_in_source(source, path)
         if updated == source:
             # Nothing changed
             return jsonify({"success": True, "value": None})
-        config_path.write_text(updated, encoding="utf-8")
+        replace_config_source(config_path, updated, original_bytes)
         return jsonify({"success": True})
+    except ConfigSyncError:
+        raise
     except Exception:
         return jsonify({"success": False, "error": "An error occurred while removing the configuration subsection"}), 500
 
 
 @app.route("/api/config_add_torrent_client", methods=["POST"])
+@_config_write_route
 def config_add_torrent_client():
     """Create a custom-named torrent client from an example template."""
-    if not _is_authenticated():
-        return jsonify({"success": False, "error": "Authentication required (web session)"}), 401
-    if not _verify_csrf_header() or not _verify_same_origin():
-        return jsonify({"success": False, "error": "CSRF/Origin validation failed"}), 403
-
     data = _request_json_dict()
     client_name = str(data.get("name", "")).strip()
     template_name = str(data.get("template", "")).strip()
@@ -5095,13 +5745,14 @@ def config_add_torrent_client():
         return jsonify({"success": False, "error": "Unknown torrent client template"}), 400
 
     config_path = STATE_DIR / "data" / "config.py"
-    user_config = _load_config_from_file(config_path) or {}
+    original_bytes = config_path.read_bytes()
+    source = original_bytes.decode("utf-8")
+    user_config = _parse_config_source(source)
     user_clients = _as_dict(user_config.get("TORRENT_CLIENTS")) or {}
     if client_name.casefold() in {str(name).casefold() for name in user_clients}:
         return jsonify({"success": False, "error": "A client with that name already exists"}), 409
 
     try:
-        source = config_path.read_text(encoding="utf-8")
         if not isinstance(user_config.get("TORRENT_CLIENTS"), Mapping):
             source = _replace_config_value_in_source(source, ["TORRENT_CLIENTS"], "{}")
         updated = _replace_config_value_in_source(
@@ -5109,7 +5760,7 @@ def config_add_torrent_client():
             ["TORRENT_CLIENTS", client_name],
             _python_literal(dict(template)),
         )
-        config_path.write_text(updated, encoding="utf-8")
+        replace_config_source(config_path, updated, original_bytes)
         try:
             _write_audit_log(
                 "add_subsection",
@@ -5120,6 +5771,8 @@ def config_add_torrent_client():
             )
         except Exception as audit_error:
             console.print(f"Failed to write config audit record: {audit_error}", markup=False)
+    except ConfigSyncError:
+        raise
     except Exception as error:
         console.print(f"Failed to add torrent client: {error}", markup=False)
         return jsonify({"success": False, "error": "An error occurred while adding the torrent client"}), 500
@@ -5134,13 +5787,9 @@ def config_add_torrent_client():
 
 
 @app.route("/api/config_rename_torrent_client", methods=["POST"])
+@_config_write_route
 def config_rename_torrent_client():
     """Rename a torrent-client block and its DEFAULT client references."""
-    if not _is_authenticated():
-        return jsonify({"success": False, "error": "Authentication required (web session)"}), 401
-    if not _verify_csrf_header() or not _verify_same_origin():
-        return jsonify({"success": False, "error": "CSRF/Origin validation failed"}), 403
-
     data = _request_json_dict()
     old_name = str(data.get("old_name", "")).strip()
     new_name = str(data.get("new_name", "")).strip()
@@ -5155,7 +5804,9 @@ def config_rename_torrent_client():
         return jsonify({"success": False, "error": "Choose a different client name"}), 400
 
     config_path = STATE_DIR / "data" / "config.py"
-    user_config = _load_config_from_file(config_path) or {}
+    original_bytes = config_path.read_bytes()
+    source = original_bytes.decode("utf-8")
+    user_config = _parse_config_source(source)
     user_clients = _as_dict(user_config.get("TORRENT_CLIENTS")) or {}
     actual_old_name = next(
         (str(name) for name in user_clients if str(name).casefold() == old_name.casefold()),
@@ -5179,7 +5830,6 @@ def config_rename_torrent_client():
         return jsonify({"success": False, "error": "Torrent client configuration is invalid"}), 400
 
     try:
-        source = config_path.read_text(encoding="utf-8")
         updated = _replace_config_value_in_source(
             source,
             ["TORRENT_CLIENTS", new_name],
@@ -5205,7 +5855,7 @@ def config_rename_torrent_client():
                 updated = _replace_config_value_in_source(updated, ["DEFAULT", key], _python_literal(next_value))
                 updated_references.append(key)
 
-        config_path.write_text(updated, encoding="utf-8")
+        replace_config_source(config_path, updated, original_bytes)
         try:
             _write_audit_log(
                 "rename_subsection",
@@ -5216,6 +5866,8 @@ def config_rename_torrent_client():
             )
         except Exception as audit_error:
             console.print(f"Failed to write config audit record: {audit_error}", markup=False)
+    except ConfigSyncError:
+        raise
     except Exception as error:
         console.print(f"Failed to rename torrent client: {error}", markup=False)
         return jsonify({"success": False, "error": "An error occurred while renaming the torrent client"}), 500
@@ -5269,6 +5921,7 @@ def config_test_torrent_client():
                     "host": str(client_config.get("qbit_url", "")),
                     "port": str(client_config.get("qbit_port", "")),
                     "VERIFY_WEBUI_CERTIFICATE": verify_certificate,
+                    "FORCE_SCHEME_FROM_HOST": True,
                     "REQUESTS_ARGS": {"timeout": 10},
                 }
                 api_key = str(client_config.get("qbit_api_key", "")).strip()
@@ -5980,6 +6633,7 @@ def reset_execution_description():
 
 
 @app.route("/api/execution_screenshots/<screenshot_id>/image")
+@limiter.limit("7200 per hour", key_func=_rate_limit_key_func, override_defaults=True)
 def execution_screenshot_image(screenshot_id: str):
     """Serve one reviewed local screenshot after resolving it through its session."""
     session_id = str(request.args.get("session_id", "")).strip()
@@ -6280,37 +6934,21 @@ def execute_command():
                 if not Path(str(base_dir)).is_absolute():
                     base_dir = str(Path(str(base_dir)).resolve())
 
-                # Extra validation for the constructed command to guard
-                # against command-injection and to make validation explicit
-                # for static analysis tools.
+                # Validate the constructed argv structure and the values that carry
+                # security meaning. Shell punctuation is valid data when passed as
+                # an argv value to a subprocess that does not invoke a shell.
                 try:
-                    # Ensure command is a list of strings
-                    command = _validate_upload_assistant_args(command)
+                    if not isinstance(command, list) or not all(isinstance(arg, str) for arg in command):
+                        raise ValueError("Invalid command structure")
+                    if len(command) < 4 or command[0] != sys.executable or command[1] != "-u" or command[3] != validated_path:
+                        raise ValueError("Invalid command structure")
 
-                    # Re-assert the execution path is safe
-                    try:
-                        _assert_safe_resolved_path(command[3] if len(command) > 3 else command[-1])
-                    except Exception:
-                        # Fallback: validated_path is expected at position 3 for subprocess
-                        try:
-                            _assert_safe_resolved_path(validated_path)
-                        except Exception as err:
-                            raise ValueError("Invalid execution path") from err
+                    _assert_safe_resolved_path(validated_path)
 
-                    # Ensure the upload_script is the expected script under the repo
-                    try:
-                        expected_script = os.path.realpath(str(CODE_DIR / "upload.py"))
-                        script_real = os.path.realpath(command[2])
-                        if script_real != expected_script:
-                            raise ValueError("Invalid script path")
-                    except IndexError as err:
-                        raise ValueError("Invalid command structure") from err
-
-                    # Disallow shell metacharacters in any argument
-                    forbidden = set(";&|$`><*?~!\n\r\x00")
-                    for a in command:
-                        if any(ch in a for ch in forbidden):
-                            raise ValueError("Invalid characters in command argument")
+                    expected_script = os.path.realpath(str(CODE_DIR / "upload.py"))
+                    script_real = os.path.realpath(command[2])
+                    if script_real != expected_script:
+                        raise ValueError("Invalid script path")
                 except Exception as err:
                     console.print(f"Refusing to run unsafe command: {err}", markup=False)
                     _discard_session_state(session_id, process_state)
@@ -6412,51 +7050,59 @@ def execute_command():
 
                     while process.poll() is None or not output_queue.empty():
                         has_output, output = _read_output(output_queue)
+                        previous_prompt_type = str(process_state.get("input_type") or "text") if process_state.get("awaiting_input") else None
                         if has_output and output is not None:
                             output_type, char = output
                             if output_type not in buffers:
                                 buffers[output_type] = ""
                             buffers[output_type] += char
-                            prompt_type = _subprocess_prompt_type(buffers[output_type])
-                            if prompt_type:
-                                _set_process_awaiting_input_if_current(session_id, process_state, True, prompt_type)
+                            prompt_type = _subprocess_prompt_type(buffers[output_type], previous_prompt_type)
 
-                            # Flush on newline or when buffer grows large
-                            if _should_flush_subprocess_output(buffers[output_type], char):
-                                if buffers[output_type].strip() == PROMPT_SOUND_STDOUT_MARKER:
-                                    buffers[output_type] = ""
-                                    yield f"data: {json.dumps({'type': 'prompt_sound'})}\n\n"
-                                    continue
-                                if not prompt_type:
-                                    _set_process_awaiting_input_if_current(session_id, process_state, False)
-                                chunk = buffers[output_type]
-                                buffers[output_type] = ""
-
-                                progress_event = _subprocess_progress_event(chunk)
-                                if progress_event is not None:
-                                    _set_process_progress_if_current(session_id, process_state, progress_event)
-                                    yield f"data: {json.dumps({'type': 'progress', 'data': progress_event})}\n\n"
-                                    continue
-
-                                # Convert to HTML fragment. If helper missing, escape and wrap in <pre>
-                                try:
-                                    if ansi_to_html:
-                                        html_fragment = ansi_to_html(chunk)
-                                    else:
-                                        import html as _html
-
-                                        html_fragment = f"<pre>{_html.escape(chunk)}</pre>"
-
-                                    yield f"data: {json.dumps({'type': 'html', 'data': html_fragment, 'origin': output_type})}\n\n"
-                                except Exception as e:
-                                    console.print(f"HTML conversion error: {e}", markup=False)
-                                    import html as _html
-
-                                    html_fragment = f"<pre>{_html.escape(chunk)}</pre>"
-                                    yield f"data: {json.dumps({'type': 'html', 'data': html_fragment, 'origin': output_type})}\n\n"
+                            if not _should_flush_subprocess_output(buffers[output_type], char):
+                                continue
                         else:
-                            # keepalive to keep the SSE connection alive
-                            yield f"data: {json.dumps({'type': 'keepalive'})}\n\n"
+                            # cli_ui writes its input marker without a newline.
+                            # Flush it when output has been idle for the queue timeout.
+                            pending_type = next((kind for kind, buffer in buffers.items() if _should_flush_subprocess_output(buffer, "", idle=True)), None)
+                            if pending_type is None:
+                                yield f"data: {json.dumps({'type': 'keepalive'})}\n\n"
+                                continue
+                            output_type = pending_type
+                            prompt_type = _subprocess_prompt_type(buffers[output_type], previous_prompt_type)
+
+                        if buffers[output_type].strip() == PROMPT_SOUND_STDOUT_MARKER:
+                            buffers[output_type] = ""
+                            yield f"data: {json.dumps({'type': 'prompt_sound'})}\n\n"
+                            continue
+                        if prompt_type:
+                            _set_process_awaiting_input_if_current(session_id, process_state, True, prompt_type)
+                        else:
+                            _set_process_awaiting_input_if_current(session_id, process_state, False)
+                        chunk = buffers[output_type]
+                        buffers[output_type] = ""
+
+                        progress_event = _subprocess_progress_event(chunk)
+                        if progress_event is not None:
+                            _set_process_progress_if_current(session_id, process_state, progress_event)
+                            yield f"data: {json.dumps({'type': 'progress', 'data': progress_event})}\n\n"
+                            continue
+
+                        # Convert to HTML fragment. If helper missing, escape and wrap in <pre>
+                        try:
+                            if ansi_to_html:
+                                html_fragment = ansi_to_html(chunk)
+                            else:
+                                import html as _html
+
+                                html_fragment = f"<pre>{_html.escape(chunk)}</pre>"
+
+                            yield f"data: {json.dumps({'type': 'html', 'data': html_fragment, 'origin': output_type})}\n\n"
+                        except Exception as e:
+                            console.print(f"HTML conversion error: {e}", markup=False)
+                            import html as _html
+
+                            html_fragment = f"<pre>{_html.escape(chunk)}</pre>"
+                            yield f"data: {json.dumps({'type': 'html', 'data': html_fragment, 'origin': output_type})}\n\n"
 
                     # Flush remaining buffers as HTML
                     for t, remaining in list(buffers.items()):

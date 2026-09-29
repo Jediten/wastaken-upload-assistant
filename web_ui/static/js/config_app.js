@@ -1,5 +1,7 @@
 const { useEffect, useMemo, useRef, useState } = React;
 const useModalFocus = window.useUAModalFocus;
+const { state: apiKeyExpiryState, label: apiKeyExpiryLabel } =
+  window.UAApiKeyExpiry;
 
 const CONFIG_FIELD_RESET_EVENT = "ua-config-field-reset";
 const CONFIG_COMPACT_LAYOUT_BREAKPOINT = 768;
@@ -80,27 +82,10 @@ function loadQRCodeLib() {
   });
 }
 
-// Info icon component (similar to lucide-react Info icon)
-const InfoIcon = ({ className = "" }) => {
-  return React.createElement(
-    "svg",
-    {
-      xmlns: "http://www.w3.org/2000/svg",
-      width: "16",
-      height: "16",
-      viewBox: "0 0 24 24",
-      fill: "none",
-      stroke: "currentColor",
-      strokeWidth: "2",
-      strokeLinecap: "round",
-      strokeLinejoin: "round",
-      className: className,
-    },
-    React.createElement("circle", { cx: "12", cy: "12", r: "10" }),
-    React.createElement("path", { d: "M12 16v-4" }),
-    React.createElement("path", { d: "M12 8h.01" }),
-  );
-};
+const LucideIcon = window.UALucideIcon;
+const InfoIcon = ({ className = "" }) => (
+  <LucideIcon name="info" className={className} />
+);
 
 // Reflow wrapped config comments while retaining paragraphs, lists and URLs.
 const formatConfigHelpText = (lines) =>
@@ -141,6 +126,9 @@ const DESCRIPTION_HELP_OVERRIDES = {
 };
 
 const getConfigHelpText = (item, pathParts) => {
+  if (pathParts[0] === "TRACKERS" && item.key === "cli_alias") {
+    return "Optional, case-insensitive shorthand for -tk or --trackers. The full tracker code still works. Use a unique alias without spaces or commas.";
+  }
   if (
     ["DEFAULT", "TRACKERS"].includes(pathParts[0]) &&
     Object.hasOwn(DESCRIPTION_HELP_OVERRIDES, item.key)
@@ -160,7 +148,11 @@ const getConfigHelpText = (item, pathParts) => {
     : text;
 };
 
-const TRACKER_HELP_NOTE_KEYS = new Set(["announce_url", "link_dir_name"]);
+const TRACKER_HELP_NOTE_KEYS = new Set([
+  "announce_url",
+  "cli_alias",
+  "link_dir_name",
+]);
 
 const renderAnnounceUrlHelpText = (text) =>
   text.split(/(See:\s+https?:\/\/\S+)/i).map((part, index) => {
@@ -174,12 +166,12 @@ const renderAnnounceUrlHelpText = (text) =>
           href={href}
           target="_blank"
           rel="noopener noreferrer"
-          className="ua-config-service-action font-semibold hover:underline"
+          className="ua-config-service-action inline-flex items-center gap-1 font-semibold hover:underline"
         >
           {href.endsWith("#how-to-export-cookies")
             ? "How to export cookies"
             : href}{" "}
-          <span aria-hidden="true">↗</span>
+          <LucideIcon name="external-link" className="h-3 w-3" />
         </a>
       </span>
     );
@@ -254,6 +246,11 @@ const Tooltip = ({ children, content, className = "" }) => {
         ref: triggerRef,
         onMouseEnter: showTooltip,
         onMouseLeave: hideTooltip,
+        onFocus: showTooltip,
+        onBlur: hideTooltip,
+        onKeyDown: (event) => {
+          if (event.key === "Escape") hideTooltip();
+        },
         onClick: toggleTooltip,
         className: `cursor-help ${className}`,
       },
@@ -307,6 +304,7 @@ const WorkspaceSwitcher = ({ activeWorkspace, isDarkMode, stretch }) => {
   const workspaces = [
     { id: "upload", label: "Upload", href: `${APP_BASE}/` },
     { id: "config", label: "Configuration", href: `${APP_BASE}/config` },
+    { id: "stats", label: "Stats", href: `${APP_BASE}/stats` },
   ];
 
   return (
@@ -335,85 +333,25 @@ const WorkspaceSwitcher = ({ activeWorkspace, isDarkMode, stretch }) => {
   );
 };
 
-const RailUploadIcon = () => (
-  <svg fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
-    <path
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      strokeWidth={2}
-      d="M12 16V4m0 0L7 9m5-5 5 5M5 20h14"
-    />
-  </svg>
+const RailUploadIcon = () => <RailAssetIcon name="upload" />;
+
+const RailAssetIcon = ({ name }) => (
+  <LucideIcon name={name} className="h-5 w-5" />
 );
 
-const RailConfigIcon = () => (
-  <svg fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
-    <path
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      strokeWidth={2}
-      d="M12 15.5a3.5 3.5 0 100-7 3.5 3.5 0 000 7zM19.4 15a1.7 1.7 0 00.34 1.88l.06.06-2.83 2.83-.06-.06A1.7 1.7 0 0015 19.4a1.7 1.7 0 00-1 .6l-.04.08h-4l-.04-.08a1.7 1.7 0 00-1-.6 1.7 1.7 0 00-1.88.34l-.06.06-2.83-2.83.06-.06A1.7 1.7 0 004.6 15a1.7 1.7 0 00-.6-1l-.08-.04v-4L4 9.92a1.7 1.7 0 00.6-1 1.7 1.7 0 00-.34-1.88l-.06-.06 2.83-2.83.06.06A1.7 1.7 0 009 4.6a1.7 1.7 0 001-.6l.04-.08h4l.04.08a1.7 1.7 0 001 .6 1.7 1.7 0 001.88-.34l.06-.06 2.83 2.83-.06.06A1.7 1.7 0 0019.4 9c.08.38.3.73.6 1l.08.04v4L20 14.08a1.7 1.7 0 00-.6.92z"
-    />
-  </svg>
-);
+const RailHelpIcon = () => <RailAssetIcon name="help" />;
 
-const RailHelpIcon = () => (
-  <svg fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
-    <path
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      strokeWidth={2}
-      d="M12 6.75c-2.5-1.5-5.5-1.5-8-.5v11c2.5-1 5.5-1 8 .5m0-11c2.5-1.5 5.5-1.5 8-.5v11c-2.5-1-5.5-1-8 .5m0-11v11"
-    />
-  </svg>
-);
+const RailUpdateIcon = () => <LucideIcon name="download" className="h-5 w-5" />;
 
-const RailUpdateIcon = () => (
-  <svg fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
-    <path
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      strokeWidth={2}
-      d="M12 3v12m0 0 4-4m-4 4-4-4M5 21h14"
-    />
-  </svg>
-);
+const RailChangelogIcon = () => <RailAssetIcon name="changelog" />;
 
-const RailChangelogIcon = () => (
-  <svg fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
-    <circle cx="12" cy="12" r="9" strokeWidth={2} />
-    <path
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      strokeWidth={2}
-      d="M12 7v5l3 2"
-    />
-  </svg>
-);
+const RailStatsIcon = () => <RailAssetIcon name="stats" />;
 
-const RailPaletteIcon = () => (
-  <svg fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
-    <path
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      strokeWidth={2}
-      d="M12 3a9 9 0 100 18h1.4a1.6 1.6 0 001.1-2.73 1.6 1.6 0 011.1-2.73H18A3 3 0 0021 12a9 9 0 00-9-9zM7.5 10h.01M10 6.5h.01M15 7h.01M17 11h.01"
-    />
-  </svg>
-);
-
-const RailLogoutIcon = () => (
-  <svg fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
-    <path
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      strokeWidth={2}
-      d="M10 17l5-5-5-5m5 5H3m10-8h5a2 2 0 012 2v12a2 2 0 01-2 2h-5"
-    />
-  </svg>
-);
+const RailLogoutIcon = () => <RailAssetIcon name="logout" />;
 
 function ConfigApplicationRail({
+  trackers,
+  onOpenTracker,
   isMobileLayout,
   colorTheme,
   onColorThemeChange,
@@ -477,14 +415,23 @@ function ConfigApplicationRail({
           aria-current="page"
           onClick={(event) => event.preventDefault()}
         >
-          <RailConfigIcon />
+          <RailAssetIcon name="config" />
           <span>Config</span>
+        </a>
+        <a href={`${APP_BASE}/stats`} className="ua-app-rail-button rounded-lg">
+          <RailStatsIcon />
+          <span>Stats</span>
         </a>
       </nav>
 
       <div className="min-h-4 flex-1"></div>
 
       <div className="ua-app-rail-footer grid shrink-0 gap-1 border-t p-2">
+        <window.UAApiKeyAlerts
+          trackers={trackers}
+          appBase={APP_BASE}
+          onOpenTracker={onOpenTracker}
+        />
         <button
           type="button"
           className={`ua-app-rail-button rounded-lg ${updateStatus?.update_available ? "ua-update-rail-button" : ""}`}
@@ -519,7 +466,7 @@ function ConfigApplicationRail({
             onClick={() => setIsAppearanceOpen((open) => !open)}
             aria-expanded={isAppearanceOpen}
           >
-            <RailPaletteIcon />
+            <RailAssetIcon name="palette" />
             <span>Appearance</span>
           </button>
           {isAppearanceOpen && (
@@ -1020,7 +967,24 @@ const isSensitiveKeyForPath = (key, pathParts) =>
   isSensitiveKey(key) || isTorrentClientUserPass(key, pathParts);
 const isReadOnlyKeyForPath = (key, pathParts) =>
   pathParts.includes("TORRENT_CLIENTS") && key === "torrent_client";
+const SCREENSHOT_OVERLAY_CHOICES = {
+  overlay_position: [
+    ["left", "Left"],
+    ["right", "Right"],
+  ],
+  overlay_layout: [
+    ["stacked", "Stacked"],
+    ["single_line", "Single line"],
+  ],
+};
 const DISPLAY_LABEL_OVERRIDES = {
+  frame_overlay: "Enable Frame Overlay",
+  overlay_position: "Alignment",
+  overlay_layout: "Layout",
+  overlay_frame_number: "Frame Number",
+  overlay_frame_type: "Frame Type",
+  overlay_timestamp: "Timestamp",
+  overlay_tonemapped: "Tonemapped Label",
   tag_overrides: "Release Group Overrides",
   hide_screenshot_header_if_only_section: "Hide Standalone Screenshot Header",
   multiScreens: "Multiple Screenshots",
@@ -1090,6 +1054,8 @@ const DISPLAY_WORD_LABELS = {
   pesto: "pesto",
   predb: "PreDB",
   ptgen: "PTGen",
+  qbit: "qBit",
+  qbittorrent: "qBittorrent",
   qui: "qui",
   rar: "RAR",
   rpc: "RPC",
@@ -1184,6 +1150,7 @@ const formatConfigFieldLabel = (key, pathParts = []) => {
   }
   if (pathParts.includes("TRACKERS")) {
     const trackerFieldLabels = {
+      cli_alias: "CLI Alias",
       ApiUser: "API User",
       api_key: "API Key",
       api_url: "API URL",
@@ -1192,6 +1159,7 @@ const formatConfigFieldLabel = (key, pathParts = []) => {
       my_announce_url: "Personal Announce URL",
       bhd_rss_key: "BHD RSS Key",
       bioma_api_key: "Bioma API Key",
+      image_host_api_key: "Image Host API Key",
       ptgen_api: "PTGen API Key",
       use_for_search: "Use for Search",
       link_dir_name: "Link Directory Name",
@@ -1375,7 +1343,6 @@ const trackerDefaultOverrideKeys = new Set([
 const trackerNameMap = {
   AITHER: "Aither",
   ALPHARATIO: "AlphaRatio",
-  AMIGOSSHARE: "Amigos Share Club",
   ANTHELION: "Anthelion",
   ASIANCINEMA: "AsianCinema",
   AVISTAZ: "AvistaZ",
@@ -1537,6 +1504,8 @@ const statusClassFor = (type, isDarkMode) => {
 
 // NumberInput component - styled number input using browser's built-in controls
 const NumberInput = ({
+  id,
+  inputLabel,
   value,
   onChange,
   min = 0,
@@ -1585,6 +1554,8 @@ const NumberInput = ({
   return (
     <input
       type="number"
+      id={id}
+      aria-label={inputLabel}
       value={draftValue}
       onChange={handleInputChange}
       onFocus={() => {
@@ -1999,16 +1970,10 @@ function LogoLanguageSelect({ id, value, onChange }) {
             }
           }}
         >
-          <svg
+          <LucideIcon
+            name={isOpen ? "chevron-up" : "chevron-down"}
             className="h-4 w-4"
-            viewBox="0 0 24 24"
-            fill="none"
-            stroke="currentColor"
-            strokeWidth="2"
-            aria-hidden="true"
-          >
-            <path d={isOpen ? "m6 15 6-6 6 6" : "m6 9 6 6 6-6"} />
-          </svg>
+          />
         </button>
       </div>
       {isOpen &&
@@ -2231,7 +2196,7 @@ function TagListEditor({
               removeEntry(entry);
             }}
           >
-            ×
+            <LucideIcon name="x" className="h-3 w-3" />
           </button>
         </span>
       ))}
@@ -2523,12 +2488,15 @@ function ConfigLeafEditor({
   inlineBooleanLabel,
   labelOverride,
   hideHelp = false,
+  hideLabel = false,
   allImageHosts,
   usedImageHosts,
   torrentClients,
   externalToolStatus,
   onBrowseFolder,
   onValueChange,
+  inputAction,
+  labelStatus,
 }) {
   const path = [...pathParts, item.key];
   const fieldId = path.join("--");
@@ -2836,9 +2804,10 @@ function ConfigLeafEditor({
               href="https://www.bittorrent.org/beps/bep_0016.html"
               target="_blank"
               rel="noreferrer"
-              className="ua-config-service-action font-semibold hover:underline"
+              className="ua-config-service-action inline-flex items-center gap-1 font-semibold hover:underline"
             >
-              Learn more <span aria-hidden="true">↗</span>
+              Learn more
+              <LucideIcon name="external-link" className="h-3 w-3" />
             </a>
           </p>
         )}
@@ -2907,7 +2876,11 @@ function ConfigLeafEditor({
             : "grid grid-cols-1 items-start gap-3 px-4 py-3 md:grid-cols-12"
         }
       >
-        <div className={fullWidth ? "" : "col-span-1 md:col-span-4"}>
+        <div
+          className={
+            hideLabel ? "sr-only" : fullWidth ? "" : "col-span-1 md:col-span-4"
+          }
+        >
           <div className="flex items-center gap-2">
             <div className={labelClass}>{displayLabel}</div>
             {helpText && (
@@ -2992,7 +2965,7 @@ function ConfigLeafEditor({
         case "min_successful_image_uploads":
           return { min: 1, max: 10, step: 1 };
         case "overlay_text_size":
-          return { min: 10, max: 50, step: 1 };
+          return { min: 1, max: 100, step: 1 };
         case "logo_size":
           return { min: 100, max: 1000, step: 50 };
         case "bluray_image_size":
@@ -3022,7 +2995,11 @@ function ConfigLeafEditor({
             : "grid grid-cols-1 items-start gap-3 px-4 py-3 md:grid-cols-12"
         }
       >
-        <div className={fullWidth ? "" : "col-span-1 md:col-span-4"}>
+        <div
+          className={
+            hideLabel ? "sr-only" : fullWidth ? "" : "col-span-1 md:col-span-4"
+          }
+        >
           <div className="flex items-center gap-2">
             <div className={labelClass}>{displayLabel}</div>
             {helpText && (
@@ -3036,6 +3013,8 @@ function ConfigLeafEditor({
         </div>
         <div className={fullWidth ? "" : "col-span-1 md:col-span-7"}>
           <NumberInput
+            id={fieldId}
+            inputLabel={displayLabel}
             value={numericValue}
             onChange={(newValue) => {
               setNumericValue(newValue);
@@ -3295,7 +3274,11 @@ function ConfigLeafEditor({
             : "grid grid-cols-1 items-start gap-3 px-4 py-3 md:grid-cols-12"
         }
       >
-        <div className={fullWidth ? "" : "col-span-1 md:col-span-4"}>
+        <div
+          className={
+            hideLabel ? "sr-only" : fullWidth ? "" : "col-span-1 md:col-span-4"
+          }
+        >
           <div className="flex items-center gap-2">
             <div className={labelClass}>{displayLabel}</div>
             {helpText && (
@@ -3567,24 +3550,16 @@ function ConfigLeafEditor({
                       onClick={(e) => removeClient(client, e)}
                       className="ua-config-list-tag-remove inline-flex h-4 w-4 shrink-0 items-center justify-center rounded"
                     >
-                      ×
+                      <LucideIcon name="x" className="h-3 w-3" />
                     </button>
                   </span>
                 ))
               )}
             </div>
-            <svg
+            <LucideIcon
+              name="chevron-down"
               className={`ua-config-accordion-chevron h-4 w-4 shrink-0 transition-transform ${isOpen ? "rotate-180" : "rotate-0"}`}
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              strokeWidth="2"
-              strokeLinecap="round"
-              strokeLinejoin="round"
-              aria-hidden="true"
-            >
-              <path d="m6 9 6 6 6-6"></path>
-            </svg>
+            />
           </div>
           {isOpen && (
             <div
@@ -3757,24 +3732,39 @@ function ConfigLeafEditor({
 
   return (
     <div className="space-y-2">
-      <div className="flex items-center gap-2">
-        <label htmlFor={fieldId} className={labelClass}>
-          {displayLabel}
-        </label>
-        {credentialHelp?.required && (
-          <span className="ua-config-required-badge border font-semibold">
-            Required
-          </span>
-        )}
-        {helpText && !credentialHelp && (
-          <Tooltip content={helpText}>
-            <InfoIcon
-              className={`w-4 h-4 ${isDarkMode ? "text-gray-400 hover:text-gray-300" : "text-gray-500 hover:text-gray-600"}`}
-            />
-          </Tooltip>
-        )}
+      <div
+        className={
+          hideLabel
+            ? "sr-only"
+            : "flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1"
+        }
+      >
+        <div className="flex items-center gap-2">
+          <label htmlFor={fieldId} className={labelClass}>
+            {displayLabel}
+          </label>
+          {credentialHelp?.required && (
+            <span className="ua-config-required-badge border font-semibold">
+              Required
+            </span>
+          )}
+          {helpText && !credentialHelp && (
+            <Tooltip content={helpText}>
+              <InfoIcon
+                className={`w-4 h-4 ${isDarkMode ? "text-gray-400 hover:text-gray-300" : "text-gray-500 hover:text-gray-600"}`}
+              />
+            </Tooltip>
+          )}
+        </div>
+        {labelStatus}
       </div>
-      <div className="flex flex-col gap-2 sm:flex-row">
+      <div
+        className={
+          inputAction
+            ? "ua-config-api-key-controls"
+            : "flex flex-col gap-2 sm:flex-row"
+        }
+      >
         <input
           id={fieldId}
           type="text"
@@ -3796,6 +3786,7 @@ function ConfigLeafEditor({
           disabled={readOnly}
           className={`${inputClass}${readOnly ? " opacity-70 cursor-not-allowed" : ""}`}
         />
+        {inputAction}
         {canBrowseTorrentFolder && (
           <button
             type="button"
@@ -3827,9 +3818,10 @@ function ConfigLeafEditor({
                 href={credentialHelp.href}
                 target="_blank"
                 rel="noreferrer"
-                className={`ua-config-service-action font-semibold hover:underline ${credentialHelp.linkOnNewLine ? "mt-0.5 block" : ""}`}
+                className={`ua-config-service-action items-center gap-1 font-semibold hover:underline ${credentialHelp.linkOnNewLine ? "mt-0.5 flex" : "inline-flex"}`}
               >
-                {credentialHelp.linkLabel} <span aria-hidden="true">↗</span>
+                {credentialHelp.linkLabel}
+                <LucideIcon name="external-link" className="h-3 w-3" />
               </a>
             </React.Fragment>
           )}
@@ -3907,18 +3899,7 @@ function MetadataCacheServices({
             }}
             aria-hidden="true"
           >
-            <svg
-              width="18"
-              height="18"
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              strokeWidth="2"
-              strokeLinecap="round"
-              strokeLinejoin="round"
-            >
-              <path d="m9 18 6-6-6-6"></path>
-            </svg>
+            <LucideIcon name="chevron-right" className="h-[18px] w-[18px]" />
           </span>
         </span>
       </button>
@@ -3976,8 +3957,9 @@ function MetadataCacheServices({
   );
 }
 
-/** Keep disabled text across settings pages until the editing session is reset. */
-const ReleaseGroupDraftContext = React.createContext(null);
+/** Keep disabled override drafts across settings pages until the editing session is reset. */
+const OverrideDraftContext = React.createContext(null);
+const TrackerDefaultValuesContext = React.createContext({});
 
 /** Read stored or staged overrides without substituting example groups. */
 const parseReleaseGroupOverrides = (value) => {
@@ -4019,9 +4001,12 @@ function ReleaseGroupOverrides({
   item,
   pathParts,
   pendingValue,
+  trackerItems,
+  pendingChanges,
   onValueChange,
 }) {
-  const draftCache = React.useContext(ReleaseGroupDraftContext);
+  const draftCache = React.useContext(OverrideDraftContext);
+  const defaults = React.useContext(TrackerDefaultValuesContext);
   const [isOpen, setIsOpen] = useState(false);
   const [openNames, setOpenNames] = useState(new Set());
   const [newName, setNewName] = useState("");
@@ -4035,12 +4020,24 @@ function ReleaseGroupOverrides({
   const pathKey = path.join("/");
   const fieldPrefix = path.join("--");
   const groupNames = Object.keys(groups || {});
+  const globalGroups = parseReleaseGroupOverrides(defaults.tag_overrides);
+  const inheritedField = (name, key) =>
+    window.UAReleaseGroupInheritance.resolve({
+      name,
+      key,
+      pathParts,
+      defaults,
+      globalGroups,
+      trackerItems,
+      pendingChanges,
+    });
 
   const setFieldEnabled = (name, key, enabled) => {
     const nextValues = { ...groups[name] };
     if (enabled) {
       nextValues[key] =
-        draftCache.current.get(pathKey)?.get(name)?.get(key) ?? "";
+        draftCache.current.get(pathKey)?.get(name)?.get(key) ??
+        inheritedField(name, key).value;
     } else {
       // Remember disabled text only for this editing session, outside the saved map.
       const scopeDrafts = draftCache.current.get(pathKey) || new Map();
@@ -4062,7 +4059,7 @@ function ReleaseGroupOverrides({
     });
 
   const validateName = (name, currentName = null) => {
-    const normalize = (value) => value.trim().replace(/^-+/, "").toLowerCase();
+    const normalize = window.UAReleaseGroupInheritance.normalizeName;
     if (!normalize(name) || [...name].some((char) => char.charCodeAt(0) < 32)) {
       return "Enter a release group name.";
     }
@@ -4160,6 +4157,13 @@ function ReleaseGroupOverrides({
                 to enable its override. Disabled fields inherit their usual
                 text; an enabled field left empty uses blank text.
               </p>
+              {pathParts[0] !== "TRACKERS" && (
+                <p className="ua-config-service-description text-xs leading-relaxed">
+                  Inherited text varies by tracker. New overrides start with
+                  DEFAULT text; tracker-specific release-group overrides still
+                  take priority.
+                </p>
+              )}
               {groupNames.length === 0 && (
                 <p className="ua-config-service-description text-sm">
                   No release group overrides configured.
@@ -4195,25 +4199,19 @@ function ReleaseGroupOverrides({
                           })
                         }
                       >
-                        <svg
+                        <span
                           className="ua-config-accordion-chevron shrink-0 transition-transform"
                           style={{
                             transform: isGroupOpen
                               ? "rotate(90deg)"
                               : "rotate(0deg)",
                           }}
-                          width="18"
-                          height="18"
-                          viewBox="0 0 24 24"
-                          fill="none"
-                          stroke="currentColor"
-                          strokeWidth="2"
-                          strokeLinecap="round"
-                          strokeLinejoin="round"
-                          aria-hidden="true"
                         >
-                          <path d="m9 18 6-6-6-6" />
-                        </svg>
+                          <LucideIcon
+                            name="chevron-right"
+                            className="h-[18px] w-[18px]"
+                          />
+                        </span>
                         <span className="min-w-0">
                           <span className="block break-words text-sm font-semibold">
                             {name}
@@ -4312,6 +4310,7 @@ function ReleaseGroupOverrides({
                               Object.hasOwn(values, field.key) &&
                               values[field.key] !== null;
                             const textId = `${fieldPrefix}--${encodeURIComponent(name)}--${field.key}`;
+                            const inherited = inheritedField(name, field.key);
                             return (
                               <div
                                 key={field.key}
@@ -4344,14 +4343,15 @@ function ReleaseGroupOverrides({
                                   id={textId}
                                   type="text"
                                   aria-label={`${label} for ${name}`}
+                                  aria-describedby={`${textId}--source`}
                                   disabled={!enabled}
                                   value={
                                     enabled
                                       ? values[field.key]
-                                      : (draftCache.current
-                                          .get(pathKey)
-                                          ?.get(name)
-                                          ?.get(field.key) ?? "")
+                                      : inherited.preview
+                                  }
+                                  placeholder={
+                                    enabled ? "" : inherited.placeholder
                                   }
                                   className="ua-config-input mt-auto w-full rounded-md border px-3 py-2 text-sm disabled:cursor-not-allowed disabled:opacity-50"
                                   onChange={(event) =>
@@ -4364,6 +4364,14 @@ function ReleaseGroupOverrides({
                                     })
                                   }
                                 />
+                                <span
+                                  id={`${textId}--source`}
+                                  className="ua-config-service-description text-xs"
+                                >
+                                  {enabled
+                                    ? inherited.overrideLabel
+                                    : inherited.inheritedLabel}
+                                </span>
                               </div>
                             );
                           })}
@@ -4527,7 +4535,7 @@ function FolderPickerModal({ fieldLabel, onCancel, onSelect }) {
                   className="ua-config-folder-row flex w-full items-center gap-3 rounded-lg border px-3 py-2.5 text-left"
                   onClick={() => openFolder(item.path)}
                 >
-                  <span aria-hidden="true">📁</span>
+                  <LucideIcon name="folder" className="h-4 w-4" />
                   <span className="min-w-0">
                     <span className="block truncate text-sm font-medium">
                       {item.name}
@@ -4620,18 +4628,7 @@ function TorrentClientCreator({ templateItems, configuredNames, onAddClient }) {
           style={{ transform: isOpen ? "rotate(90deg)" : "rotate(0deg)" }}
           aria-hidden="true"
         >
-          <svg
-            width="18"
-            height="18"
-            viewBox="0 0 24 24"
-            fill="none"
-            stroke="currentColor"
-            strokeWidth="2"
-            strokeLinecap="round"
-            strokeLinejoin="round"
-          >
-            <path d="m9 18 6-6-6-6"></path>
-          </svg>
+          <LucideIcon name="chevron-right" className="h-[18px] w-[18px]" />
         </span>
       </button>
 
@@ -4858,19 +4855,7 @@ function HelpResourcesModal({
             data-ua-modal-initial-focus
             onClick={onClose}
           >
-            <svg
-              className="h-4 w-4"
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              aria-hidden="true"
-            >
-              <path
-                d="M6 6l12 12M18 6L6 18"
-                strokeWidth="2"
-                strokeLinecap="round"
-              />
-            </svg>
+            <LucideIcon name="x" className="h-4 w-4" />
           </button>
         </div>
 
@@ -4928,12 +4913,10 @@ function HelpResourcesModal({
                           {link.description}
                         </span>
                       </span>
-                      <span
-                        className="ua-config-service-action shrink-0 text-sm"
-                        aria-hidden="true"
-                      >
-                        ↗
-                      </span>
+                      <LucideIcon
+                        name="external-link"
+                        className="ua-config-service-action h-4 w-4 shrink-0"
+                      />
                     </a>
                   ))}
                 </div>
@@ -4947,9 +4930,10 @@ function HelpResourcesModal({
             href="https://github.com/wastaken7/Upload-Assistant/tree/development/docs"
             target="_blank"
             rel="noopener noreferrer"
-            className="ua-config-service-action rounded-lg border px-4 py-2 text-sm font-semibold"
+            className="ua-config-service-action inline-flex items-center gap-2 rounded-lg border px-4 py-2 text-sm font-semibold"
           >
-            Browse all documentation ↗
+            Browse all documentation
+            <LucideIcon name="external-link" className="h-4 w-4" />
           </a>
         </div>
       </section>
@@ -5218,6 +5202,328 @@ function TorrentClientSettings({
   );
 }
 
+function ApiKeyExpiryStatus({
+  tracker,
+  apiKey,
+  isDraft,
+  expiry,
+  onStatus,
+  renderField,
+}) {
+  window.UAApiKeyExpiry.useClock();
+  const [feedback, setFeedback] = useState(null);
+  const [checking, setChecking] = useState(false);
+  const requestRef = useRef(null);
+  useEffect(() => {
+    setFeedback(null);
+    setChecking(false);
+    return () => requestRef.current?.abort();
+  }, [apiKey, isDraft]);
+
+  const check = async () => {
+    requestRef.current?.abort();
+    const controller = new AbortController();
+    requestRef.current = controller;
+    setChecking(true);
+    setFeedback(null);
+    try {
+      const response = await apiFetch(`${API_BASE}/tracker_api_key_status`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        signal: controller.signal,
+        body: JSON.stringify({
+          tracker: tracker.name,
+          api_key: apiKey,
+          refresh: true,
+        }),
+      });
+      const data = await response.json();
+      if (controller.signal.aborted) return;
+      if (!response.ok || !data.success)
+        throw new Error(data.error || "API key check failed.");
+      onStatus(data.expiry);
+      setFeedback({ message: data.message, error: false });
+    } catch (error) {
+      if (!controller.signal.aborted)
+        setFeedback({
+          message: error.message || "API key check failed.",
+          error: true,
+        });
+    } finally {
+      if (!controller.signal.aborted) setChecking(false);
+    }
+  };
+  const state = apiKeyExpiryState(expiry);
+  const tone =
+    state === "expired"
+      ? "text-red-500"
+      : state === "expiring"
+        ? "text-amber-500"
+        : "ua-config-service-description";
+  const details = [
+    apiKeyExpiryLabel(expiry),
+    expiry?.checked_at &&
+      `Last checked ${new Date(expiry.checked_at).toLocaleString()}`,
+    feedback?.message,
+    isDraft &&
+      "Checking uses your draft key. Save Config to use it for uploads.",
+    !apiKey &&
+      "Checks the key supplied by your saved Prowlarr connection, if available.",
+  ]
+    .filter(Boolean)
+    .join("\n");
+  return (
+    <div className="space-y-2">
+      {renderField(
+        <button
+          type="button"
+          className="ua-config-service-action flex shrink-0 items-center gap-1.5 rounded-lg border px-3 py-2 text-xs font-semibold disabled:opacity-50"
+          disabled={checking}
+          aria-label={checking ? "Checking API key" : "Check API key"}
+          title={
+            isDraft
+              ? "Check draft API key"
+              : !apiKey
+                ? "Check Prowlarr API key"
+                : "Check API key"
+          }
+          onClick={check}
+        >
+          {checking && (
+            <LucideIcon name="loader-circle" className="h-3 w-3 animate-spin" />
+          )}
+          {checking ? "Checking…" : "Check"}
+        </button>,
+        <div
+          className={`ml-auto min-w-0 max-w-full text-xs ${tone}`}
+          role="status"
+          aria-label="API key status"
+        >
+          <Tooltip content={details}>
+            <span
+              tabIndex={0}
+              aria-label={details}
+              className="inline-flex items-center gap-1 border-b border-dotted border-current"
+            >
+              {isDraft && "Draft · "}
+              {feedback && !feedback.error && (
+                <>
+                  <LucideIcon name="check" className="h-3 w-3" />
+                  Accepted ·
+                </>
+              )}
+              {apiKeyExpiryLabel(expiry, true)}
+            </span>
+          </Tooltip>
+        </div>,
+      )}
+      {feedback?.error && (
+        <p className="text-xs text-red-500" role="alert">
+          {feedback.message}
+        </p>
+      )}
+    </div>
+  );
+}
+
+function TrackerDefaultOverrides({
+  items,
+  pathParts,
+  isDarkMode,
+  pendingChanges,
+  onValueChange,
+}) {
+  const drafts = React.useContext(OverrideDraftContext);
+  const defaults = React.useContext(TrackerDefaultValuesContext);
+  const [isOpen, setIsOpen] = useState(false);
+  const { fieldState, updateField, coerceFieldValue, setFieldEnabled } =
+    window.UATrackerDefaultOverrides.createEditor({
+      pathParts,
+      defaults,
+      pendingChanges,
+      drafts: drafts.current,
+      onValueChange,
+    });
+  const activeCount = items.filter((item) => fieldState(item).enabled).length;
+  const groups = [
+    {
+      title: "Images & Screenshots",
+      keys: [
+        "add_logo",
+        "logo_size",
+        "thumbnail_size",
+        "screens_per_row",
+        "multiScreens",
+        "pack_thumb_size",
+        "add_bluray_link",
+        "use_bluray_images",
+        "bluray_image_size",
+        "add_audio_spectrogram",
+        "add_dynamic_hdr_plot",
+      ],
+    },
+    {
+      title: "Description Text",
+      keys: [
+        "episode_overview",
+        "custom_description_header",
+        "screenshot_header",
+        "disc_menu_header",
+        "audio_spectrogram_header",
+        "dynamic_hdr_plot_header",
+        "tonemapped_header",
+        "custom_signature",
+        "custom_header",
+        "custom_footer",
+        "mediainfo_header",
+        "user_description",
+      ],
+    },
+    {
+      title: "Limits & Injection",
+      keys: ["charLimit", "fileLimit", "processLimit", "inject_delay"],
+    },
+  ];
+  const itemByKey = new Map(items.map((item) => [item.key, item]));
+
+  return (
+    <section
+      className="ua-config-accordion overflow-hidden rounded-xl border"
+      data-open={isOpen ? "true" : "false"}
+    >
+      <button
+        type="button"
+        onClick={() => setIsOpen((open) => !open)}
+        className="ua-config-accordion-trigger flex w-full items-center justify-between gap-4 px-4 py-3 text-left"
+        aria-expanded={isOpen}
+      >
+        <span className="min-w-0">
+          <span className="block text-sm font-semibold">
+            Tracker-Specific DEFAULT Overrides
+          </span>
+          <span className="ua-config-service-description mt-1 block text-xs font-normal">
+            {activeCount > 0
+              ? `${activeCount} ${activeCount === 1 ? "field overrides" : "fields override"} DEFAULT. All others inherit.`
+              : "All fields inherit DEFAULT settings."}
+          </span>
+        </span>
+        <span className="ua-config-service-action shrink-0 text-xs font-medium">
+          {isOpen ? "Hide" : "Show"}
+        </span>
+      </button>
+      {isOpen && (
+        <div className="ua-config-accordion-panel space-y-5 border-t p-4">
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
+            <p className="ua-config-service-description min-w-0 flex-1 text-xs leading-relaxed">
+              Tick a field to override DEFAULT for this tracker. Untick it to
+              restore inheritance when you save. Matching release group
+              overrides still take priority for description text.
+            </p>
+            <div className="flex shrink-0 items-center justify-end gap-2">
+              <button
+                type="button"
+                className="ua-config-service-action rounded-md border px-2.5 py-1.5 text-xs font-semibold disabled:cursor-not-allowed disabled:opacity-50"
+                aria-label={`Enable all DEFAULT overrides for ${pathParts[1]}`}
+                disabled={activeCount === items.length}
+                onClick={() =>
+                  items.forEach((item) => setFieldEnabled(item, true))
+                }
+              >
+                Enable all
+              </button>
+              <button
+                type="button"
+                className="ua-config-service-action rounded-md border px-2.5 py-1.5 text-xs font-semibold disabled:cursor-not-allowed disabled:opacity-50"
+                aria-label={`Disable all DEFAULT overrides for ${pathParts[1]}`}
+                disabled={activeCount === 0}
+                onClick={() =>
+                  items.forEach((item) => setFieldEnabled(item, false))
+                }
+              >
+                Disable all
+              </button>
+            </div>
+          </div>
+          {groups.map((group) => {
+            const groupItems = group.keys
+              .map((key) => itemByKey.get(key))
+              .filter(Boolean);
+            if (!groupItems.length) return null;
+            return (
+              <section key={group.title} className="space-y-3">
+                <h4 className="ua-config-section-heading border-b py-1 text-xs font-semibold">
+                  {group.title}
+                </h4>
+                <div className="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-4">
+                  {groupItems.map((item) => {
+                    const state = fieldState(item);
+                    const label = formatConfigFieldLabel(item.key, pathParts);
+                    const helpText = getConfigHelpText(item, pathParts);
+                    const displayValue = state.enabled
+                      ? state.value
+                      : state.inherited;
+                    // Pending numeric edits arrive as strings from ConfigLeaf.
+                    // Retain the field type so booleans keep their toggle control.
+                    const coerceValue = (value) =>
+                      coerceFieldValue(item, value);
+                    return (
+                      <div
+                        key={item.key}
+                        className="flex min-w-0 flex-col gap-2"
+                      >
+                        <div className="flex items-center gap-2">
+                          <label className="flex min-w-0 cursor-pointer items-center gap-2 text-sm font-medium">
+                            <input
+                              type="checkbox"
+                              checked={state.enabled}
+                              aria-label={`Override ${label} for ${pathParts[1]}`}
+                              className="ua-theme-checkbox h-4 w-4 shrink-0"
+                              onChange={(event) =>
+                                setFieldEnabled(item, event.target.checked)
+                              }
+                            />
+                            <span>{label}</span>
+                          </label>
+                          {helpText && (
+                            <Tooltip content={helpText}>
+                              <InfoIcon className="ua-config-service-description h-4 w-4 shrink-0" />
+                            </Tooltip>
+                          )}
+                        </div>
+                        <fieldset
+                          disabled={!state.enabled}
+                          className={`min-w-0 ${state.enabled ? "" : "opacity-50"}`}
+                        >
+                          <ConfigLeaf
+                            item={{ ...item, value: coerceValue(displayValue) }}
+                            pathParts={pathParts}
+                            isDarkMode={isDarkMode}
+                            fullWidth={true}
+                            hideLabel={true}
+                            hideHelp={true}
+                            onValueChange={(_path, value) =>
+                              updateField(item, coerceValue(value))
+                            }
+                          />
+                        </fieldset>
+                        <span className="ua-config-service-description text-xs">
+                          {state.enabled
+                            ? "Overrides DEFAULT"
+                            : "Inherits DEFAULT"}
+                        </span>
+                      </div>
+                    );
+                  })}
+                </div>
+              </section>
+            );
+          })}
+        </div>
+      )}
+    </section>
+  );
+}
+
 function TrackerSettings({
   items,
   pathParts,
@@ -5225,9 +5531,10 @@ function TrackerSettings({
   allImageHosts,
   usedImageHosts,
   torrentClients,
-  overridesEnabled = false,
-  onToggleOverrides = () => {},
   pendingChanges,
+  tracker,
+  apiKeyExpiry,
+  onApiKeyStatus,
   onValueChange,
 }) {
   const releaseGroupOverrides = (items || []).find(
@@ -5256,6 +5563,7 @@ function TrackerSettings({
         "ApiUser",
         "bhd_rss_key",
         "bioma_api_key",
+        "image_host_api_key",
         "ptgen_api",
         "base_url",
         "api_url",
@@ -5274,6 +5582,7 @@ function TrackerSettings({
         "doubleup",
         "sticky",
         "modq",
+        "force_rehost_images",
         "exclusive",
         "refundable",
         "draft",
@@ -5321,7 +5630,7 @@ function TrackerSettings({
     {
       id: "advanced",
       title: "Advanced",
-      keys: ["link_dir_name", "channel", "trackers"],
+      keys: ["cli_alias", "link_dir_name", "channel", "trackers"],
     },
   ];
   const groupedKeys = new Set(groupDefinitions.flatMap((group) => group.keys));
@@ -5354,21 +5663,49 @@ function TrackerSettings({
             <h3 className="text-sm font-semibold">{group.title}</h3>
           </div>
           <div className="p-4">
-            <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
-              {group.items.map((item) => (
-                <ConfigLeaf
-                  key={item.key}
-                  item={item}
-                  pathParts={pathParts}
-                  isDarkMode={isDarkMode}
-                  fullWidth={true}
-                  hideHelp={TRACKER_HELP_NOTE_KEYS.has(item.key)}
-                  allImageHosts={allImageHosts}
-                  usedImageHosts={usedImageHosts}
-                  torrentClients={torrentClients}
-                  onValueChange={onValueChange}
-                />
-              ))}
+            <div className="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-4">
+              {group.items.map((item) => {
+                const renderField = (inputAction, labelStatus) => (
+                  <ConfigLeaf
+                    item={item}
+                    pathParts={pathParts}
+                    isDarkMode={isDarkMode}
+                    fullWidth={true}
+                    hideHelp={TRACKER_HELP_NOTE_KEYS.has(item.key)}
+                    allImageHosts={allImageHosts}
+                    usedImageHosts={usedImageHosts}
+                    torrentClients={torrentClients}
+                    onValueChange={onValueChange}
+                    inputAction={inputAction}
+                    labelStatus={labelStatus}
+                  />
+                );
+                return (
+                  <div key={item.key} className="min-w-0">
+                    {item.key === "api_key" &&
+                    tracker?.api_key_expiry_supported ? (
+                      <ApiKeyExpiryStatus
+                        renderField={renderField}
+                        tracker={tracker}
+                        apiKey={String(
+                          pendingChanges?.get(
+                            [...pathParts, "api_key"].join("/"),
+                          )?.value ??
+                            item.value ??
+                            "",
+                        ).trim()}
+                        isDraft={pendingChanges?.has(
+                          [...pathParts, "api_key"].join("/"),
+                        )}
+                        expiry={apiKeyExpiry}
+                        onStatus={onApiKeyStatus}
+                      />
+                    ) : (
+                      renderField()
+                    )}
+                  </div>
+                );
+              })}
             </div>
             {group.items
               .filter((item) => TRACKER_HELP_NOTE_KEYS.has(item.key))
@@ -5391,10 +5728,21 @@ function TrackerSettings({
           </div>
         </section>
       ))}
+      {overrideItems.length > 0 && (
+        <TrackerDefaultOverrides
+          items={overrideItems}
+          pathParts={pathParts}
+          isDarkMode={isDarkMode}
+          pendingChanges={pendingChanges}
+          onValueChange={onValueChange}
+        />
+      )}
       {releaseGroupOverrides && (
         <ReleaseGroupOverrides
           item={releaseGroupOverrides}
           pathParts={pathParts}
+          trackerItems={editableItems}
+          pendingChanges={pendingChanges}
           pendingValue={
             pendingChanges?.get(
               [...pathParts, releaseGroupOverrides.key].join("/"),
@@ -5402,72 +5750,6 @@ function TrackerSettings({
           }
           onValueChange={onValueChange}
         />
-      )}
-      {overrideItems.length > 0 && (
-        <section className="ua-config-client-settings-group overflow-hidden rounded-lg border">
-          <div className="ua-config-section-heading flex flex-col gap-3 border-b px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
-            <div>
-              <h3 className="text-sm font-semibold">
-                Tracker-Specific DEFAULT Overrides
-              </h3>
-              <p className="ua-config-service-description mt-1 text-xs">
-                Enable only when this tracker should use different description,
-                screenshot, or injection settings from DEFAULT.
-              </p>
-              <p className="ua-config-service-description mt-1 text-xs">
-                Matching release group overrides still take priority for
-                description text.
-              </p>
-            </div>
-            <div className="flex shrink-0 items-center gap-3">
-              <button
-                type="button"
-                onClick={() =>
-                  onToggleOverrides(!overridesEnabled, overrideItems)
-                }
-                aria-pressed={overridesEnabled}
-                aria-label={`Tracker-specific overrides: ${overridesEnabled ? "Enabled" : "Disabled"}`}
-                className="ua-config-boolean-toggle relative inline-flex h-6 w-11 items-center rounded-full transition-colors"
-                data-enabled={overridesEnabled ? "true" : "false"}
-              >
-                <span
-                  className={`ua-config-boolean-knob inline-block h-4 w-4 transform rounded-full transition-transform ${overridesEnabled ? "translate-x-6" : "translate-x-1"}`}
-                />
-              </button>
-              <span className="text-sm font-medium">
-                {overridesEnabled ? "Enabled" : "Disabled"}
-              </span>
-            </div>
-          </div>
-          {overridesEnabled ? (
-            <div>
-              <div className="ua-config-state-panel m-4 rounded-lg border p-4 text-sm">
-                These values will override the matching DEFAULT settings for
-                this tracker. Disable this section to remove them and restore
-                DEFAULT inheritance.
-              </div>
-              <div className="grid grid-cols-1 gap-4 border-t p-4 md:grid-cols-2 xl:grid-cols-3">
-                {overrideItems.map((item) => (
-                  <ConfigLeaf
-                    key={item.key}
-                    item={item}
-                    pathParts={pathParts}
-                    isDarkMode={isDarkMode}
-                    fullWidth={true}
-                    allImageHosts={allImageHosts}
-                    usedImageHosts={usedImageHosts}
-                    torrentClients={torrentClients}
-                    onValueChange={onValueChange}
-                  />
-                ))}
-              </div>
-            </div>
-          ) : (
-            <div className="ua-config-state-panel m-4 rounded-lg border p-4 text-sm">
-              This tracker currently inherits the matching DEFAULT settings.
-            </div>
-          )}
-        </section>
       )}
     </div>
   );
@@ -5579,14 +5861,13 @@ function DescriptionImagesSection({
 }
 
 function TrackerManager({
+  requestedTracker,
+  onSavedApiKeyStatus,
   items,
   defaultTrackersItem,
   trackerView,
   trackerCatalog,
   pendingChanges = new Map(),
-  pendingTrackerOverrideModes = new Map(),
-  trackerOverrideEditors = new Set(),
-  onToggleTrackerOverrides = () => {},
   pathParts,
   isDarkMode,
   allImageHosts,
@@ -5639,6 +5920,69 @@ function TrackerManager({
     useState(new Set());
   const [refreshingSetupTracker, setRefreshingSetupTracker] = useState("");
   const [setupRefreshFeedback, setSetupRefreshFeedback] = useState(null);
+  const [apiKeyChecks, setApiKeyChecks] = useState({});
+  useEffect(() => setApiKeyChecks({}), [trackerCatalog]);
+  const focusedRequest = useRef(null);
+  useEffect(() => {
+    if (!requestedTracker) return;
+    setTrackerQuery("");
+    setDestinationFilter("all");
+    setCategoryFilter("all");
+  }, [requestedTracker]);
+  useEffect(() => {
+    if (!requestedTracker || focusedRequest.current === requestedTracker)
+      return;
+    const frame = window.requestAnimationFrame(() => {
+      const card = document.getElementById(
+        `tracker-settings-${requestedTracker.name}`,
+      );
+      if (!card) return;
+      const field = document.getElementById(
+        `TRACKERS--${requestedTracker.name}--api_key`,
+      );
+      (field || card).scrollIntoView({ block: "center" });
+      // Focusing the field itself would reveal/clear its redacted placeholder.
+      (field?.nextElementSibling || card.querySelector("button"))?.focus({
+        preventScroll: true,
+      });
+      focusedRequest.current = requestedTracker;
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [
+    requestedTracker,
+    trackerView,
+    trackerCatalog,
+    expandedGroups,
+    trackerQuery,
+    destinationFilter,
+    categoryFilter,
+  ]);
+
+  const trackerApiKey = (tracker) => {
+    const name = String(tracker.name).toUpperCase();
+    const saved = trackerItemByName
+      .get(name)
+      ?.children?.find((item) => item.key === "api_key")?.value;
+    return String(
+      pendingTrackerValues.get(name)?.get("api_key") ?? saved ?? "",
+    ).trim();
+  };
+  const trackerCliAliases = (tracker) => {
+    const name = String(tracker.name).toUpperCase();
+    const saved = trackerItemByName
+      .get(name)
+      ?.children?.find((item) => item.key === "cli_alias")?.value;
+    // Keep the saved alias searchable while editing so its open card stays
+    // visible. After saving, the refreshed config supplies only the new alias.
+    return [saved, pendingTrackerValues.get(name)?.get("cli_alias")];
+  };
+  const trackerExpiry = (tracker) => {
+    const name = String(tracker.name).toUpperCase();
+    const check = apiKeyChecks[name];
+    if (check?.apiKey === trackerApiKey(tracker)) return check.expiry;
+    if (pendingTrackerValues.get(name)?.has("api_key")) return null;
+    return tracker.api_key_expiry;
+  };
 
   useEffect(() => {
     setSelectedDefaults(normalizeTrackers(defaultTrackersItem.value));
@@ -5842,7 +6186,18 @@ function TrackerManager({
       tracker.credential_source === "prowlarr" &&
       !statuses.some((status) => status.label === "Prowlarr")
         ? [...statuses, { label: "Prowlarr", tone: "accent" }]
-        : statuses;
+        : [...statuses];
+    const expiry = trackerExpiry(tracker);
+    const expiryState = apiKeyExpiryState(expiry);
+    if (expiryState === "expired" || expiryState === "expiring") {
+      visibleStatuses.push({
+        label:
+          expiryState === "expired"
+            ? "API key expired"
+            : "API key expires soon",
+        tone: expiryState === "expired" ? "danger" : "warning",
+      });
+    }
     return (
       <span className="flex min-w-0 items-center gap-3">
         <span className="ua-config-tracker-icon flex h-9 w-9 shrink-0 items-center justify-center overflow-hidden rounded-lg border">
@@ -6215,6 +6570,7 @@ function TrackerManager({
         [
           tracker.name,
           tracker.display_name,
+          ...trackerCliAliases(tracker),
           tracker.base_url,
           getTrackerCategories(tracker)
             .map((category) => category.label)
@@ -6317,7 +6673,7 @@ function TrackerManager({
               type="search"
               value={trackerQuery}
               onChange={(event) => setTrackerQuery(event.target.value)}
-              placeholder="Search by tracker name or acronym..."
+              placeholder="Search by tracker name, code or CLI alias..."
               className="ua-config-input w-full rounded-lg border px-3 py-2"
             />
           </div>
@@ -6338,10 +6694,7 @@ function TrackerManager({
         const isDefault = selectedDefaults.includes(name);
         const isDefaultPending = isDefault !== originalDefaultSet.has(name);
         const isRemoving = trackerItem?.source === "removing";
-        const isUnsaved =
-          pendingTrackerValues.has(name) ||
-          pendingTrackerOverrideModes.has(name) ||
-          isDefaultPending;
+        const isUnsaved = pendingTrackerValues.has(name) || isDefaultPending;
         const statuses = [];
         if (isDefault) statuses.push({ label: "Default", tone: "accent" });
         if (isRemoving) {
@@ -6353,16 +6706,10 @@ function TrackerManager({
         const hasCookieRequirement = setupState.requirements.some(
           (requirement) => requirement.id === "cookie",
         );
-        const hasStoredOverrides = (trackerItem?.children || []).some(
-          (item) =>
-            trackerDefaultOverrideKeys.has(item.key) &&
-            item.source === "config",
-        );
-        const overridesEnabled =
-          hasStoredOverrides || trackerOverrideEditors.has(name);
         return (
           <section
             key={name}
+            id={`tracker-settings-${name}`}
             className="ua-config-accordion overflow-hidden rounded-xl border"
             data-open={isOpen ? "true" : "false"}
             data-removing={isRemoving ? "true" : "false"}
@@ -6387,18 +6734,10 @@ function TrackerManager({
                   }}
                   aria-hidden="true"
                 >
-                  <svg
-                    width="18"
-                    height="18"
-                    viewBox="0 0 24 24"
-                    fill="none"
-                    stroke="currentColor"
-                    strokeWidth="2"
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                  >
-                    <path d="m9 18 6-6-6-6"></path>
-                  </svg>
+                  <LucideIcon
+                    name="chevron-right"
+                    className="h-[18px] w-[18px]"
+                  />
                 </span>
               </button>
               {trackerView === "configured" ? (
@@ -6427,9 +6766,22 @@ function TrackerManager({
             </div>
             {isOpen && (
               <div className="ua-config-accordion-panel border-t p-4">
-                <p className="ua-config-service-description mb-4 text-xs">
-                  Tracker code: <code className="font-semibold">{name}</code>
-                </p>
+                <div className="ua-config-service-description mb-4 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs">
+                  <span>
+                    Tracker code: <code className="font-semibold">{name}</code>
+                  </span>
+                  {tracker.codebase && (
+                    <span className="inline-flex items-center gap-2">
+                      <span aria-hidden="true">·</span>
+                      <span>
+                        Codebase:{" "}
+                        <span className="font-semibold">
+                          {tracker.codebase}
+                        </span>
+                      </span>
+                    </span>
+                  )}
+                </div>
                 {trackerView === "available" && (
                   <div className="ua-config-state-panel mb-4 rounded-lg border p-4 text-sm">
                     Enter the required authentication details and choose Save
@@ -6458,12 +6810,17 @@ function TrackerManager({
                         {setupState.requirements.map((requirement) => (
                           <span
                             key={requirement.id}
-                            className="ua-config-tracker-requirement rounded-full border px-2.5 py-1 text-xs font-semibold"
+                            className="ua-config-tracker-requirement inline-flex items-center gap-1 rounded-full border px-2.5 py-1 text-xs font-semibold"
                             data-complete={
                               requirement.complete ? "true" : "false"
                             }
                           >
-                            {requirement.complete ? "✓ " : "○ "}
+                            <LucideIcon
+                              name={
+                                requirement.complete ? "circle-check" : "circle"
+                              }
+                              className="h-3 w-3"
+                            />
                             {requirement.label}
                           </span>
                         ))}
@@ -6538,10 +6895,17 @@ function TrackerManager({
                     usedImageHosts={usedImageHosts}
                     torrentClients={torrentClients}
                     pendingChanges={pendingChanges}
-                    overridesEnabled={overridesEnabled}
-                    onToggleOverrides={(enabled, overrideItems) =>
-                      onToggleTrackerOverrides(name, enabled, overrideItems)
-                    }
+                    tracker={tracker}
+                    apiKeyExpiry={trackerExpiry(tracker)}
+                    onApiKeyStatus={(expiry) => {
+                      setApiKeyChecks((current) => ({
+                        ...current,
+                        [name]: { apiKey: trackerApiKey(tracker), expiry },
+                      }));
+                      if (!pendingTrackerValues.get(name)?.has("api_key")) {
+                        onSavedApiKeyStatus?.(name, expiry);
+                      }
+                    }}
                     onValueChange={onValueChange}
                   />
                 ) : (
@@ -6917,7 +7281,203 @@ function ArrIntegrationSettings({
   );
 }
 
+function ScreenshotOverlaySettings({
+  items,
+  pathParts,
+  pendingChanges,
+  isDarkMode,
+  onValueChange,
+}) {
+  const [showPreview, setShowPreview] = useState(false);
+  const previewId = React.useId();
+  const overlayKeys = [
+    "overlay_frame_number",
+    "overlay_frame_type",
+    "overlay_timestamp",
+    "overlay_tonemapped",
+  ];
+  const valueFor = (key) => {
+    const change = pendingChanges?.get([...pathParts, key].join("/"));
+    return change
+      ? change.value
+      : items.find((item) => item.key === key)?.value;
+  };
+  const enabled = Boolean(valueFor("frame_overlay"));
+  const singleLine = valueFor("overlay_layout") === "single_line";
+  const alignRight = valueFor("overlay_position") === "right";
+  const sampleLabels = singleLine
+    ? [
+        ["overlay_frame_number", "Frame 60921"],
+        ["overlay_timestamp", "00:42:18.375"],
+        ["overlay_frame_type", "I-Frame"],
+        ["overlay_tonemapped", "Tonemapped"],
+      ]
+    : [
+        ["overlay_frame_number", "Frame Number: 60921"],
+        ["overlay_frame_type", "Frame Type: I"],
+        ["overlay_timestamp", "Timestamp: 00:42:18.375"],
+        ["overlay_tonemapped", "Tonemapped"],
+      ];
+  const selectedLabels = enabled
+    ? sampleLabels.filter(([key]) => valueFor(key)).map(([, text]) => text)
+    : [];
+  const lines =
+    singleLine && selectedLabels.length
+      ? [selectedLabels.join(" • ")]
+      : selectedLabels;
+  const textSize = Math.max(
+    1,
+    Math.min(100, Number(valueFor("overlay_text_size")) || 18),
+  );
+  const renderField = (key) => {
+    const item = items.find((entry) => entry.key === key);
+    return item ? (
+      <ConfigLeaf
+        key={key}
+        item={{ ...item, value: valueFor(key) }}
+        pathParts={pathParts}
+        fullWidth={true}
+        depth={0}
+        isDarkMode={isDarkMode}
+        onValueChange={(path, value, meta) =>
+          onValueChange(path, value, {
+            ...meta,
+            originalValue:
+              typeof item.value === "number" ? String(item.value) : item.value,
+          })
+        }
+      />
+    ) : null;
+  };
+  const renderChoice = (key, label, choices) => {
+    const item = items.find((entry) => entry.key === key);
+    if (!item) return null;
+    const fieldId = [...pathParts, key].join("--");
+    const value = valueFor(key);
+    return (
+      <div key={key} className="space-y-2">
+        <label htmlFor={fieldId} className="block text-sm font-semibold">
+          {label}
+        </label>
+        <select
+          id={fieldId}
+          className="ua-config-select w-full rounded-lg border px-3 py-2 text-sm"
+          value={choices.some(([key]) => key === value) ? value : choices[0][0]}
+          onChange={(event) =>
+            onValueChange([...pathParts, key], event.target.value, {
+              originalValue: item.value,
+            })
+          }
+        >
+          {choices.map(([value, label]) => (
+            <option key={value} value={value}>
+              {label}
+            </option>
+          ))}
+        </select>
+      </div>
+    );
+  };
+  return (
+    <section className="ua-config-section overflow-hidden rounded-xl border">
+      <div className="ua-config-section-heading flex items-center justify-between gap-4 border-b px-4 py-3">
+        <div>
+          <h3 className="text-sm font-semibold">Screenshot Overlays</h3>
+          <p className="ua-config-service-description mt-1 text-xs">
+            Place labels at the top of screenshots. Turning overlays off keeps
+            your selections.
+          </p>
+        </div>
+        <button
+          type="button"
+          className="ua-config-service-action shrink-0 rounded-lg border px-3 py-2 text-xs font-semibold"
+          aria-expanded={showPreview}
+          aria-controls={previewId}
+          onClick={() => setShowPreview((visible) => !visible)}
+        >
+          {showPreview ? "Hide preview" : "Preview"}
+        </button>
+      </div>
+      <div className="ua-config-section-panel space-y-5 p-4">
+        <div className="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-4">
+          {renderField("frame_overlay")}
+          {renderField("overlay_text_size")}
+          {renderChoice(
+            "overlay_position",
+            "Alignment",
+            SCREENSHOT_OVERLAY_CHOICES.overlay_position,
+          )}
+          {renderChoice(
+            "overlay_layout",
+            "Layout",
+            SCREENSHOT_OVERLAY_CHOICES.overlay_layout,
+          )}
+        </div>
+        <div className="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-4">
+          {overlayKeys.map(renderField)}
+        </div>
+        {showPreview && (
+          <figure id={previewId} className="w-full max-w-lg min-w-0">
+            <figcaption className="mb-2 flex flex-wrap items-center justify-between gap-2 text-xs">
+              <span className="font-semibold">Overlay preview</span>
+              <span className="ua-config-service-description">
+                Sample tonemapped frame
+              </span>
+            </figcaption>
+            <svg
+              viewBox="0 0 800 450"
+              className="block w-full overflow-hidden rounded-lg border"
+              role="img"
+              aria-label={`Screenshot preview: ${lines.join(", ") || "no overlay labels"}`}
+            >
+              <rect width="800" height="450" fill="#334b66" />
+              <circle cx="610" cy="112" r="45" fill="#e6c39a" />
+              <path
+                d="M0 315 210 120 405 320 590 200 800 340V450H0Z"
+                fill="#182e42"
+              />
+              <path d="m147 178 63-58 75 77-69-29-29 22Z" fill="#91a4b2" />
+              <path d="M0 358Q220 295 425 372T800 353V450H0Z" fill="#0b202d" />
+              <g
+                fill="white"
+                stroke="black"
+                strokeWidth="2"
+                paintOrder="stroke"
+                fontFamily="sans-serif"
+                fontSize={textSize}
+                textAnchor={alignRight ? "end" : "start"}
+              >
+                {lines.map((line, index) => (
+                  <text
+                    key={line}
+                    x={alignRight ? 784 : 16}
+                    y={16 + textSize + index * textSize * 1.1}
+                  >
+                    {line}
+                  </text>
+                ))}
+              </g>
+            </svg>
+            <p
+              className="ua-config-service-description mt-2 text-xs"
+              aria-live="polite"
+            >
+              {!enabled
+                ? "Frame overlays are disabled."
+                : lines.length
+                  ? "Illustrative preview. Text scales with screenshot resolution."
+                  : "Choose at least one label to display."}
+            </p>
+          </figure>
+        )}
+      </div>
+    </section>
+  );
+}
+
 function ItemList({
+  requestedTracker,
+  onSavedApiKeyStatus,
   items,
   pathParts,
   depth,
@@ -6932,9 +7492,6 @@ function ItemList({
   trackerView,
   trackerCatalog,
   pendingChanges,
-  pendingTrackerOverrideModes,
-  trackerOverrideEditors,
-  onToggleTrackerOverrides,
   onAddTorrentClient,
   onRemovePendingTorrentClient,
   onRenameTorrentClient,
@@ -6994,12 +7551,13 @@ function ItemList({
   if (isTrackerConfig && defaultTrackersItem) {
     return (
       <TrackerManager
+        requestedTracker={requestedTracker}
+        onSavedApiKeyStatus={onSavedApiKeyStatus}
         items={subsections}
         defaultTrackersItem={defaultTrackersItem}
         trackerView={trackerView || "default"}
         trackerCatalog={trackerCatalog}
         pendingChanges={pendingChanges}
-        pendingTrackerOverrideModes={pendingTrackerOverrideModes}
         pathParts={pathParts}
         isDarkMode={isDarkMode}
         allImageHosts={allImageHosts}
@@ -7007,8 +7565,6 @@ function ItemList({
         expandedGroups={expandedGroups}
         toggleGroup={toggleGroup}
         torrentClients={torrentClients}
-        trackerOverrideEditors={trackerOverrideEditors}
-        onToggleTrackerOverrides={onToggleTrackerOverrides}
         onRemoveTracker={onRemoveTracker}
         onUndoRemoveTracker={onUndoRemoveTracker}
         onRefreshTrackerCatalog={onRefreshTrackerCatalog}
@@ -7041,7 +7597,16 @@ function ItemList({
       "ffmpeg_is_good",
       "ffmpeg_warmup",
     ],
-    "Screenshot Overlays": ["frame_overlay", "overlay_text_size"],
+    "Screenshot Overlays": [
+      "frame_overlay",
+      "overlay_text_size",
+      "overlay_position",
+      "overlay_layout",
+      "overlay_frame_number",
+      "overlay_frame_type",
+      "overlay_timestamp",
+      "overlay_tonemapped",
+    ],
     Headers: [
       "custom_description_header",
       "tonemapped_header",
@@ -7083,7 +7648,7 @@ function ItemList({
   const isScreenshotEnhancementsSection =
     pathParts[0] === "DEFAULT" &&
     regularItems.some((item) => item.key === "tone_map") &&
-    regularItems.some((item) => item.key === "frame_overlay");
+    regularItems.some((item) => item.key === "overlay_frame_number");
 
   // Partition regularItems into subgroups and an "Other" bucket
   const grouped = {};
@@ -7112,9 +7677,12 @@ function ItemList({
     }
     if (isScreenshotCaptureProcessingSection) {
       if (
-        ["screens", "cutoff_screens", "scale_screenshots_for_par"].includes(
-          it.key,
-        )
+        [
+          "screens",
+          "cutoff_screens",
+          "scale_screenshots_for_par",
+          "scale_dvd_screenshots_for_par",
+        ].includes(it.key)
       ) {
         grouped["Screenshot Capture"].push(it);
       } else {
@@ -7160,9 +7728,10 @@ function ItemList({
               href="https://github.com/wastaken7/Upload-Assistant/blob/development/docs/upload-order-and-bandwidth-control.md"
               target="_blank"
               rel="noopener noreferrer"
-              className="ua-config-service-action font-semibold hover:underline"
+              className="ua-config-service-action inline-flex items-center gap-1 font-semibold hover:underline"
             >
-              upload order and bandwidth control guide ↗
+              upload order and bandwidth control guide
+              <LucideIcon name="external-link" className="h-3 w-3" />
             </a>
             .
           </p>
@@ -7261,6 +7830,21 @@ function ItemList({
           {Object.keys(grouped).map((gname) => {
             const itemsInGroup = grouped[gname] || [];
             if (!itemsInGroup.length) return null;
+            if (
+              gname === "Screenshot Overlays" &&
+              isScreenshotEnhancementsSection
+            ) {
+              return (
+                <ScreenshotOverlaySettings
+                  key={gname}
+                  items={itemsInGroup}
+                  pathParts={pathParts}
+                  pendingChanges={pendingChanges}
+                  isDarkMode={isDarkMode}
+                  onValueChange={onValueChange}
+                />
+              );
+            }
             if (gname === "Sonarr" || gname === "Radarr") {
               return (
                 <ArrIntegrationSettings
@@ -7520,9 +8104,10 @@ function ItemList({
                       href="https://github.com/wastaken7/Upload-Assistant/blob/development/docs/description-builder.md"
                       target="_blank"
                       rel="noopener noreferrer"
-                      className="ua-config-service-action font-semibold hover:underline"
+                      className="ua-config-service-action inline-flex items-center gap-1 font-semibold hover:underline"
                     >
-                      description builder guide ↗
+                      description builder guide
+                      <LucideIcon name="external-link" className="h-3 w-3" />
                     </a>
                     .
                   </p>
@@ -7791,18 +8376,10 @@ function ItemList({
                   }}
                   aria-hidden="true"
                 >
-                  <svg
-                    width="18"
-                    height="18"
-                    viewBox="0 0 24 24"
-                    fill="none"
-                    stroke="currentColor"
-                    strokeWidth="2"
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                  >
-                    <path d="m9 18 6-6-6-6"></path>
-                  </svg>
+                  <LucideIcon
+                    name="chevron-right"
+                    className="h-[18px] w-[18px]"
+                  />
                 </span>
               </button>
               {isOpen && (
@@ -8813,7 +9390,7 @@ function AccessLogTab({ isDarkMode }) {
                       className="ml-1 inline-flex h-5 w-5 items-center justify-center rounded text-red-500 hover:text-red-700"
                       aria-label={`Remove ${ip} from the whitelist`}
                     >
-                      ×
+                      <LucideIcon name="x" className="h-3 w-3" />
                     </button>
                   </span>
                 ))}
@@ -8862,7 +9439,7 @@ function AccessLogTab({ isDarkMode }) {
                       className="ml-1 inline-flex h-5 w-5 items-center justify-center rounded text-red-500 hover:text-red-700"
                       aria-label={`Remove ${ip} from the blacklist`}
                     >
-                      ×
+                      <LucideIcon name="x" className="h-3 w-3" />
                     </button>
                   </span>
                 ))}
@@ -9010,7 +9587,13 @@ function AccessLogTab({ isDarkMode }) {
                       <div
                         className={`text-xs ${entry.success ? "text-green-600" : "text-red-600"}`}
                       >
-                        {entry.status} {entry.success ? "✓" : "✗"}
+                        <span className="inline-flex items-center gap-1">
+                          {entry.status}
+                          <LucideIcon
+                            name={entry.success ? "circle-check" : "circle-x"}
+                            className="h-3 w-3"
+                          />
+                        </span>
                       </div>
                     </div>
                   </div>
@@ -9030,6 +9613,8 @@ function AccessLogTab({ isDarkMode }) {
 }
 
 function ConfigSidebar({
+  trackers,
+  onOpenTracker,
   isMobileLayout,
   sections,
   activeTab,
@@ -9181,7 +9766,7 @@ function ConfigSidebar({
           aria-label="Close configuration navigation"
           onClick={onClose}
         >
-          ×
+          <LucideIcon name="x" className="h-4 w-4" />
         </button>
       </div>
 
@@ -9333,6 +9918,12 @@ function ConfigSidebar({
         )}
 
         <div className="mt-3 grid gap-2">
+          <window.UAApiKeyAlerts
+            trackers={trackers}
+            appBase={APP_BASE}
+            onOpenTracker={onOpenTracker}
+            placement="sidebar"
+          />
           <button
             type="button"
             className={`ua-config-sidebar-action rounded-lg px-3 py-2 text-sm font-semibold ${updateStatus?.update_available ? "ua-update-sidebar-action" : ""}`}
@@ -9414,11 +10005,11 @@ function ConfigApp() {
   );
   const [expandedGroups, setExpandedGroups] = useState(new Set());
   const [pendingChanges, setPendingChanges] = useState(new Map());
-  const releaseGroupDrafts = useRef(new Map());
+  const overrideDrafts = useRef(new Map());
 
   useEffect(() => {
     const resetDrafts = (event) => {
-      releaseGroupDrafts.current.delete(String(event.detail?.pathKey || ""));
+      overrideDrafts.current.delete(String(event.detail?.pathKey || ""));
     };
     window.addEventListener(CONFIG_FIELD_RESET_EVENT, resetDrafts);
     return () =>
@@ -9430,11 +10021,6 @@ function ConfigApp() {
   const [pendingRenamedTorrentClients, setPendingRenamedTorrentClients] =
     useState(new Map());
   const [pendingRemovedTrackers, setPendingRemovedTrackers] = useState(
-    new Set(),
-  );
-  const [pendingTrackerOverrideModes, setPendingTrackerOverrideModes] =
-    useState(new Map());
-  const [trackerOverrideEditors, setTrackerOverrideEditors] = useState(
     new Set(),
   );
   const [isSaving, setIsSaving] = useState(false);
@@ -9472,6 +10058,10 @@ function ConfigApp() {
     defaultTrackers: [],
     trackers: [],
   });
+  const [requestedTracker, setRequestedTracker] = useState(null);
+  const trackerDeepLink = useRef(
+    new URLSearchParams(window.location.search).get("tracker"),
+  );
   const folderPickerResolveRef = useRef(null);
   const [folderPicker, setFolderPicker] = useState(null);
   const [renameClientSource, setRenameClientSource] = useState("");
@@ -9634,9 +10224,30 @@ function ConfigApp() {
   };
 
   const navigateTo = (tab, subTab = "") => {
+    setRequestedTracker(null);
     setActiveTab(tab);
     setActiveSubTab(subTab);
     setIsMobileNavOpen(false);
+  };
+
+  const openTrackerSettings = (name) => {
+    const normalized = String(name).toUpperCase();
+    navigateTo("trackers", "configured");
+    setExpandedGroups(
+      (current) => new Set([...current, `TRACKERS/${normalized}`]),
+    );
+    setRequestedTracker({ name: normalized });
+  };
+
+  const updateSavedApiKeyStatus = (name, expiry) => {
+    setTrackerCatalog((current) => ({
+      ...current,
+      trackers: current.trackers.map((tracker) =>
+        tracker.name.toUpperCase() === name
+          ? { ...tracker, api_key_expiry: expiry }
+          : tracker,
+      ),
+    }));
   };
 
   useEffect(() => {
@@ -9764,7 +10375,7 @@ function ConfigApp() {
         throw new Error(data.error || "Failed to load config options");
       }
       const newSections = data.sections || [];
-      releaseGroupDrafts.current.clear();
+      overrideDrafts.current.clear();
       const fallbackSection =
         newSections.find((section) => section.section === "DEFAULT") ||
         newSections[0];
@@ -9774,8 +10385,6 @@ function ConfigApp() {
       setPendingRemovedTorrentClients(new Set());
       setPendingRenamedTorrentClients(new Map());
       setPendingRemovedTrackers(new Set());
-      setPendingTrackerOverrideModes(new Map());
-      setTrackerOverrideEditors(new Set());
       setClientTestStates(new Map());
       setProwlarrTestState(null);
       setRenameClientSource("");
@@ -9881,6 +10490,21 @@ function ConfigApp() {
           }
         }
       }
+      if (trackerDeepLink.current) {
+        const name = trackerDeepLink.current.toUpperCase();
+        trackerDeepLink.current = null;
+        const trackerSection = newSections.find(
+          (section) => section.section === "TRACKERS",
+        );
+        if (
+          trackerSection?.items?.some((item) => item.key.toUpperCase() === name)
+        ) {
+          openTrackerSettings(name);
+        }
+        const url = new URL(window.location.href);
+        url.searchParams.delete("tracker");
+        window.history.replaceState(window.history.state, "", url);
+      }
       return true;
     } catch (error) {
       setStatus({
@@ -9905,8 +10529,7 @@ function ConfigApp() {
       pendingTorrentClients.size > 0 ||
       pendingRenamedTorrentClients.size > 0 ||
       pendingRemovedTorrentClients.size > 0 ||
-      pendingRemovedTrackers.size > 0 ||
-      pendingTrackerOverrideModes.size > 0;
+      pendingRemovedTrackers.size > 0;
     setIsPendingSummaryOpen(false);
 
     if (requiresStructuralReload) {
@@ -9916,7 +10539,7 @@ function ConfigApp() {
       setPendingChanges(new Map());
     }
 
-    releaseGroupDrafts.current.clear();
+    overrideDrafts.current.clear();
 
     fieldPathsToReset.forEach((pathKey) => {
       window.dispatchEvent(
@@ -10079,7 +10702,7 @@ function ConfigApp() {
 
   const findConfigItem = (items, targetKey) => {
     for (const item of items || []) {
-      if (item.key === targetKey && !item.children) return item;
+      if (item.key === targetKey && !item.children?.length) return item;
       const nested = findConfigItem(item.children, targetKey);
       if (nested) return nested;
     }
@@ -10646,84 +11269,6 @@ function ConfigApp() {
     });
   };
 
-  const toggleTrackerOverrides = (trackerName, enabled, overrideItems) => {
-    const normalizedName = String(trackerName).toUpperCase();
-    const originalEnabled = (overrideItems || []).some(
-      (item) => item.source === "config" || item.previousSource === "config",
-    );
-
-    setTrackerOverrideEditors((currentEditors) => {
-      const next = new Set(currentEditors);
-      if (enabled) {
-        next.add(normalizedName);
-      } else {
-        next.delete(normalizedName);
-      }
-      return next;
-    });
-    setPendingTrackerOverrideModes((currentModes) => {
-      const next = new Map(currentModes);
-      if (enabled === originalEnabled) {
-        next.delete(normalizedName);
-      } else {
-        next.set(normalizedName, enabled);
-      }
-      return next;
-    });
-    setSections((currentSections) =>
-      currentSections.map((section) =>
-        section.section === "TRACKERS"
-          ? {
-              ...section,
-              items: section.items.map((trackerItem) =>
-                String(trackerItem.key).toUpperCase() === normalizedName
-                  ? {
-                      ...trackerItem,
-                      children: (trackerItem.children || []).map((item) => {
-                        if (!trackerDefaultOverrideKeys.has(item.key)) {
-                          return item;
-                        }
-                        if (enabled && item.source === "override-removing") {
-                          return {
-                            ...item,
-                            source: item.previousSource || "config",
-                            previousSource: null,
-                          };
-                        }
-                        if (!enabled && item.source === "config") {
-                          return {
-                            ...item,
-                            previousSource: item.source,
-                            source: "override-removing",
-                          };
-                        }
-                        return item;
-                      }),
-                    }
-                  : trackerItem,
-              ),
-            }
-          : section,
-      ),
-    );
-    if (!enabled) {
-      setPendingChanges((currentChanges) => {
-        const next = new Map(currentChanges);
-        for (const item of overrideItems || []) {
-          next.delete(["TRACKERS", trackerName, item.key].join("/"));
-        }
-        return next;
-      });
-    }
-    setStatusWithClear(
-      enabled
-        ? `${trackerName} will use tracker-specific overrides after you save.`
-        : `${trackerName} will inherit these settings from DEFAULT after you save.`,
-      "info",
-      3500,
-    );
-  };
-
   const removeTracker = (trackerName, wasDefault = false) => {
     const normalizedName = String(trackerName).toUpperCase();
     setSections((currentSections) =>
@@ -10748,16 +11293,6 @@ function ConfigApp() {
     setPendingRemovedTrackers((currentTrackers) => {
       const next = new Set(currentTrackers);
       next.add(normalizedName);
-      return next;
-    });
-    setPendingTrackerOverrideModes((currentModes) => {
-      const next = new Map(currentModes);
-      next.delete(normalizedName);
-      return next;
-    });
-    setTrackerOverrideEditors((currentEditors) => {
-      const next = new Set(currentEditors);
-      next.delete(normalizedName);
       return next;
     });
     setPendingChanges((currentChanges) => {
@@ -10854,8 +11389,7 @@ function ConfigApp() {
       pendingTorrentClients.size +
       pendingRenamedTorrentClients.size +
       pendingRemovedTorrentClients.size +
-      pendingRemovedTrackers.size +
-      pendingTrackerOverrideModes.size;
+      pendingRemovedTrackers.size;
     if (pendingChangeCount === 0) {
       setStatusWithClear("No changes to save.", "warn", 1500);
       return;
@@ -10912,7 +11446,7 @@ function ConfigApp() {
             body: JSON.stringify({ old_name: oldName, new_name: newName }),
           },
         );
-        const data = await response.json();
+        const data = await window.UAConfigSave.readResponse(response);
         if (!data.success) {
           throw new Error(data.error || "Failed to rename torrent client");
         }
@@ -10926,7 +11460,7 @@ function ConfigApp() {
             body: JSON.stringify({ name: clientName, template: templateName }),
           },
         );
-        const data = await response.json();
+        const data = await window.UAConfigSave.readResponse(response);
         if (!data.success && response.status !== 409) {
           throw new Error(data.error || "Failed to add torrent client");
         }
@@ -10968,54 +11502,16 @@ function ConfigApp() {
         }
       }
 
-      // Create missing subsections in the user's config (as empty dicts)
-      for (const createPath of toCreate) {
-        const respCreate = await apiFetch(`${API_BASE}/config_update`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ path: createPath, value: "{}" }),
-        });
-        const dataCreate = await respCreate.json();
-        if (!dataCreate.success) {
-          throw new Error(dataCreate.error || "Failed to create subsection");
-        }
-      }
-
-      // Apply group-level tracker overrides after any missing tracker block has
-      // been created, then save individual field edits over the copied values.
-      for (const [trackerName, enabled] of pendingTrackerOverrideModes) {
-        const response = await apiFetch(
-          `${API_BASE}/config_set_tracker_overrides`,
-          {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ tracker: trackerName, enabled }),
-          },
-        );
-        const data = await response.json();
-        if (!data.success) {
-          throw new Error(
-            data.error || "Failed to update tracker-specific overrides",
-          );
-        }
-      }
-
-      // Now save the actual pending updates
-      for (const update of pending) {
-        const response = await apiFetch(`${API_BASE}/config_update`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            path: update.path,
-            value: update.value,
-            remove: Boolean(update.removeKey),
-          }),
-        });
-        const data = await response.json();
-        if (!data.success) {
-          throw new Error(data.error || "Failed to save");
-        }
-      }
+      // Stage subsection creation and field edits together. One Save Config
+      // action uses one update request, regardless of the number of fields.
+      await window.UAConfigSave.saveUpdates(apiFetch, API_BASE, [
+        ...toCreate.map((path) => ({ path, value: "{}" })),
+        ...pending.map((update) => ({
+          path: update.path,
+          value: update.value,
+          remove: Boolean(update.removeKey),
+        })),
+      ]);
 
       for (const clientName of pendingRemovedTorrentClients) {
         const response = await apiFetch(
@@ -11028,7 +11524,7 @@ function ConfigApp() {
             }),
           },
         );
-        const data = await response.json();
+        const data = await window.UAConfigSave.readResponse(response);
         if (!data.success) {
           throw new Error(data.error || "Failed to remove torrent client");
         }
@@ -11044,7 +11540,7 @@ function ConfigApp() {
             }),
           },
         );
-        const data = await response.json();
+        const data = await window.UAConfigSave.readResponse(response);
         if (!data.success) {
           throw new Error(
             data.error || "Failed to remove tracker configuration",
@@ -11227,8 +11723,7 @@ function ConfigApp() {
     pendingTorrentClients.size +
     pendingRenamedTorrentClients.size +
     pendingRemovedTorrentClients.size +
-    pendingRemovedTrackers.size +
-    pendingTrackerOverrideModes.size;
+    pendingRemovedTrackers.size;
   const pendingChangeSummaries = useMemo(() => {
     const summaries = [];
     const availableTrackerNames = new Set(
@@ -11243,6 +11738,13 @@ function ConfigApp() {
       const path = Array.isArray(update.path) ? update.path : [];
       const key = String(path[path.length - 1] || "");
       const parentPath = path.slice(0, -1);
+      if (
+        path[0] === "TRACKERS" &&
+        trackerDefaultOverrideKeys.has(key) &&
+        (update.removeKey || update.value === null)
+      ) {
+        return "Inherit from DEFAULT";
+      }
       if (
         key === "tag_overrides" &&
         ((path[0] === "DEFAULT" && path.length === 2) ||
@@ -11422,6 +11924,16 @@ function ConfigApp() {
         if (selectedLanguage) return `Set to ${selectedLanguage.label}`;
       }
       if (update.value === "" || update.value === null) return "Set to empty";
+      if (
+        path[0] === "DEFAULT" &&
+        path.length === 2 &&
+        ["overlay_position", "overlay_layout"].includes(key)
+      ) {
+        const selectedChoice = SCREENSHOT_OVERLAY_CHOICES[key].find(
+          ([value]) => value === update.value,
+        );
+        if (selectedChoice) return `Set to ${selectedChoice[1]}`;
+      }
       if (key === "tracker_description_mode") {
         const selectedMode = TRACKER_DESCRIPTION_MODE_OPTIONS.find(
           (option) => option.value === String(update.value),
@@ -11543,13 +12055,6 @@ function ConfigApp() {
     }
     for (const [trackerName, pathKeys] of availableTrackerChanges) {
       const settingCount = pathKeys.length;
-      const normalizedTrackerName = String(trackerName).toUpperCase();
-      const overrideChange = Array.from(
-        pendingTrackerOverrideModes.entries(),
-      ).find(
-        ([pendingTrackerName]) =>
-          String(pendingTrackerName).toUpperCase() === normalizedTrackerName,
-      );
       const detailParts = [
         `${settingCount} setting${settingCount === 1 ? "" : "s"} changed`,
       ];
@@ -11557,19 +12062,11 @@ function ConfigApp() {
         .map((pathKey) => pendingChanges.get(pathKey))
         .find((update) => update.path[2] === "tag_overrides");
       if (groupUpdate) detailParts.push(describeValue(groupUpdate));
-      if (overrideChange) {
-        detailParts.push(
-          `DEFAULT overrides ${overrideChange[1] ? "enabled" : "removed"}`,
-        );
-      }
       summaries.push({
         id: `available-tracker:${trackerName}`,
         kind: "available-tracker",
         trackerName,
         pathKeys,
-        overrideChange: overrideChange
-          ? { trackerName: overrideChange[0], enabled: overrideChange[1] }
-          : null,
         title: `Configure tracker › ${getTrackerDisplayName(trackerName)}`,
         detail: detailParts.join("; "),
       });
@@ -11615,21 +12112,6 @@ function ConfigApp() {
         detail: getTrackerDisplayName(String(trackerName)),
       });
     }
-    for (const [trackerName, enabled] of pendingTrackerOverrideModes) {
-      if (availableTrackerChanges.has(String(trackerName).toUpperCase())) {
-        continue;
-      }
-      summaries.push({
-        id: `tracker-overrides:${trackerName}`,
-        kind: "tracker-overrides",
-        trackerName,
-        enabled,
-        title: "Tracker-specific DEFAULT overrides",
-        detail: `${getTrackerDisplayName(String(trackerName))}: ${
-          enabled ? "Enable" : "Remove"
-        }`,
-      });
-    }
     return summaries;
   }, [
     pendingChanges,
@@ -11637,7 +12119,6 @@ function ConfigApp() {
     pendingRemovedTrackers,
     pendingRenamedTorrentClients,
     pendingTorrentClients,
-    pendingTrackerOverrideModes,
     trackerCatalog,
   ]);
   useEffect(() => {
@@ -11645,19 +12126,6 @@ function ConfigApp() {
       setIsPendingSummaryOpen(false);
     }
   }, [pendingChangeCount]);
-  const discardTrackerOverrideChange = (trackerName, enabled) => {
-    const trackerSection = sections.find(
-      (section) => section.section === "TRACKERS",
-    );
-    const trackerItem = trackerSection?.items?.find(
-      (item) =>
-        String(item.key).toUpperCase() === String(trackerName).toUpperCase(),
-    );
-    const overrideItems = (trackerItem?.children || []).filter((item) =>
-      trackerDefaultOverrideKeys.has(item.key),
-    );
-    toggleTrackerOverrides(trackerName, !enabled, overrideItems);
-  };
   const discardPendingSummary = (summary) => {
     if (summary.kind === "field") {
       setPendingChanges((currentChanges) => {
@@ -11696,12 +12164,6 @@ function ConfigApp() {
           }),
         );
       });
-      if (summary.overrideChange) {
-        discardTrackerOverrideChange(
-          summary.overrideChange.trackerName,
-          summary.overrideChange.enabled,
-        );
-      }
     } else if (summary.kind === "client-add") {
       removePendingTorrentClient(summary.clientName);
     } else if (summary.kind === "client-rename") {
@@ -11710,8 +12172,6 @@ function ConfigApp() {
       undoRemoveTorrentClient(summary.clientName);
     } else if (summary.kind === "tracker-remove") {
       undoRemoveTracker(summary.trackerName);
-    } else if (summary.kind === "tracker-overrides") {
-      discardTrackerOverrideChange(summary.trackerName, summary.enabled);
     }
   };
   const saveDisabled = isSaving || pendingChangeCount === 0;
@@ -11807,6 +12267,8 @@ function ConfigApp() {
 
       <div className="min-h-screen">
         <ConfigApplicationRail
+          trackers={trackerCatalog.trackers}
+          onOpenTracker={openTrackerSettings}
           isMobileLayout={isMobileLayout}
           colorTheme={colorTheme}
           onColorThemeChange={handleColorThemeChange}
@@ -11838,6 +12300,8 @@ function ConfigApp() {
           onPointerCancel={cancelMobileNavGesture}
         >
           <ConfigSidebar
+            trackers={trackerCatalog.trackers}
+            onOpenTracker={openTrackerSettings}
             isMobileLayout={isMobileLayout}
             sections={sections}
             activeTab={activeTab}
@@ -11941,7 +12405,7 @@ function ConfigApp() {
                             onClick={() => setIsPendingSummaryOpen(false)}
                             aria-label="Close pending changes"
                           >
-                            ×
+                            <LucideIcon name="x" className="h-4 w-4" />
                           </button>
                         </div>
                         <div className="max-h-80 space-y-2 overflow-y-auto p-2">
@@ -12065,6 +12529,8 @@ function ConfigApp() {
                     {activeSection && (
                       <React.Fragment>
                         <ItemList
+                          requestedTracker={requestedTracker}
+                          onSavedApiKeyStatus={updateSavedApiKeyStatus}
                           items={visibleItems}
                           pathParts={[activeSection.section]}
                           depth={0}
@@ -12083,11 +12549,6 @@ function ConfigApp() {
                           }
                           trackerCatalog={trackerCatalog}
                           pendingChanges={pendingChanges}
-                          pendingTrackerOverrideModes={
-                            pendingTrackerOverrideModes
-                          }
-                          trackerOverrideEditors={trackerOverrideEditors}
-                          onToggleTrackerOverrides={toggleTrackerOverrides}
                           onAddTorrentClient={addPendingTorrentClient}
                           onRemovePendingTorrentClient={
                             removePendingTorrentClient
@@ -12134,9 +12595,18 @@ function ConfigApp() {
   );
 
   return (
-    <ReleaseGroupDraftContext.Provider value={releaseGroupDrafts}>
-      {configPage}
-    </ReleaseGroupDraftContext.Provider>
+    <OverrideDraftContext.Provider value={overrideDrafts}>
+      <TrackerDefaultValuesContext.Provider
+        value={Object.fromEntries(
+          [...trackerDefaultOverrideKeys, "tag_overrides"].map((key) => [
+            key,
+            getEffectiveDefaultValue(key),
+          ]),
+        )}
+      >
+        {configPage}
+      </TrackerDefaultValuesContext.Provider>
+    </OverrideDraftContext.Provider>
   );
 }
 

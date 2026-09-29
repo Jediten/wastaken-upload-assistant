@@ -4,7 +4,6 @@ import base64
 import contextlib
 import gc
 import math
-import os
 import re
 import time
 from collections.abc import Awaitable, Callable, Sequence
@@ -18,7 +17,9 @@ import pyimgbox
 from src.console import logger
 from src.meta import Meta
 from src.screenshot_manifest import files as manifest_files
+from src.stats import record_event_async
 from src.temp_paths import screenshots_dir
+from src.tracker_images import image_tags
 
 type ImageDict = dict[str, Any]
 
@@ -62,19 +63,47 @@ class UploadScreensManager:
         allowed_hosts: list[str] | None = None,
     ) -> tuple[list[ImageDict], int]:
         """Upload the selected screenshots and return uploaded image metadata."""
-        return await _upload_screens(
-            self.config,
-            meta,
-            screens,
-            img_host_num,
-            i,
-            total_screens,
-            custom_img_list,
-            return_dict,
-            retry_mode=retry_mode,
-            max_retries=max_retries,
-            allowed_hosts=allowed_hosts,
-        )
+        started = time.monotonic()
+        existing_image_count = len(meta.image_list or [])
+        attempts_before = int(return_dict.get("_stats_image_upload_attempts", 0) or 0)
+        successes_before = int(return_dict.get("_stats_image_upload_successes", 0) or 0)
+        bytes_before = int(return_dict.get("_stats_image_upload_bytes", 0) or 0)
+        outcome = "skipped"
+        try:
+            result = await _upload_screens(
+                self.config,
+                meta,
+                screens,
+                img_host_num,
+                i,
+                total_screens,
+                custom_img_list,
+                return_dict,
+                retry_mode=retry_mode,
+                max_retries=max_retries,
+                allowed_hosts=allowed_hosts,
+            )
+            attempted = int(return_dict.get("_stats_image_upload_attempts", 0) or 0) - attempts_before
+            uploaded = int(return_dict.get("_stats_image_upload_successes", 0) or 0) - successes_before
+            if not custom_img_list:
+                uploaded = max(uploaded, len(meta.image_list or []) - existing_image_count)
+            outcome = "success" if uploaded > 0 else "error" if attempted > 0 else "skipped"
+            return result
+        except Exception:
+            outcome = "error"
+            raise
+        finally:
+            if outcome != "skipped":
+                service = str(meta.imghost or self.config.get("DEFAULT", {}).get(f"img_host_{img_host_num}", "image_host"))
+                bytes_sent = int(return_dict.get("_stats_image_upload_bytes", 0) or 0) - bytes_before
+                await record_event_async(
+                    "api",
+                    service=service,
+                    operation="image_upload",
+                    outcome=outcome,
+                    duration_ms=(time.monotonic() - started) * 1000,
+                    bytes_count=max(0, bytes_sent),
+                )
 
 
 async def upload_image_task(args: Sequence[Any]) -> dict[str, Any]:
@@ -562,6 +591,56 @@ async def upload_image_task(args: Sequence[Any]) -> dict[str, Any]:
                 logger.error(f"[red]Unexpected error with ShareX image host: {e!s}[/red]")
                 return {"status": "failed", "reason": f"Unexpected error: {e!s}"}
 
+        elif img_host == "samaritano":
+            url = "https://img.samaritano.cc/api/v1/images"
+            api_key = config.get("TRACKERS", {}).get("SAMARITANO", {}).get("image_host_api_key")
+
+            if not isinstance(api_key, str) or not api_key.strip():
+                logger.info("[red]Samaritano image host API key not found in config (image_host_api_key).[/red]")
+                return {"status": "failed", "reason": "Missing Samaritano image host API key"}
+
+            try:
+                headers = {"Authorization": f"Bearer {api_key.strip()}"}
+                async with httpx.AsyncClient() as client, aiofiles.open(image, "rb") as img_file:
+                    files = {"file": (Path(image).name, await img_file.read())}
+                    response = await client.post(url, headers=headers, files=files, timeout=timeout)
+
+                if response.status_code not in (200, 201):
+                    logger.info(f"[yellow]Samaritano image host upload failed with status {response.status_code}.[/yellow]")
+                    return {"status": "failed", "reason": f"Samaritano upload failed: HTTP {response.status_code}"}
+
+                response_data = response.json()
+                if not isinstance(response_data, dict):
+                    return {"status": "failed", "reason": "Invalid Samaritano response"}
+
+                raw_url = response_data.get("url")
+                if not isinstance(raw_url, str) or not raw_url.strip():
+                    logger.info("[yellow]Samaritano image host response missing URL.[/yellow]")
+                    return {"status": "failed", "reason": "No URL in Samaritano response"}
+
+                raw_url = raw_url.strip()
+                thumbnail_url = response_data.get("thumbnail_url")
+                img_url = thumbnail_url.strip() if isinstance(thumbnail_url, str) and thumbnail_url.strip() else raw_url
+                return {
+                    "status": "success",
+                    "img_url": img_url,
+                    "raw_url": raw_url,
+                    "web_url": raw_url,
+                    "local_file_path": image,
+                }
+            except httpx.TimeoutException:
+                logger.info("[red]Request to Samaritano image host timed out.[/red]")
+                return {"status": "failed", "reason": "Request timed out"}
+            except httpx.RequestError as e:
+                logger.info(f"[red]Request to Samaritano image host failed with error: {e}[/red]")
+                return {"status": "failed", "reason": str(e)}
+            except ValueError as e:
+                logger.info(f"[red]Invalid JSON response from Samaritano image host: {e}[/red]")
+                return {"status": "failed", "reason": "Invalid JSON response"}
+            except Exception as e:
+                logger.error(f"[red]Unexpected error with Samaritano image host: {e!s}[/red]")
+                return {"status": "failed", "reason": f"Unexpected error: {e!s}"}
+
         elif img_host == "lostimg":
             url = "https://lostimg.cc/api/v1/images"
             try:
@@ -642,7 +721,7 @@ async def _upload_screens(
     if meta.debug:
         upload_start_time = time.time()
 
-    os.chdir(screenshots_dir(meta.base_dir, meta.uuid))
+    screenshot_path = screenshots_dir(meta.base_dir, meta.uuid)
 
     initial_img_host = default_config[f"img_host_{img_host_num}"]
     img_host = meta.imghost
@@ -671,6 +750,7 @@ async def _upload_screens(
 
         if approved_host:
             img_host = approved_host
+            meta.imghost = approved_host
         else:
             logger.info(f"[red]No approved image hosts found in config. Available: {allowed_hosts}[/red]")
             return image_list, len(image_list)
@@ -697,6 +777,7 @@ async def _upload_screens(
             "img_url": upload["img_url"],
             "raw_url": raw_url,
             "web_url": upload["web_url"],
+            "tags": image_tags(upload_meta),
         }
         upload_image_list.append(new_image)
         known_raw_urls.add(raw_url)
@@ -707,7 +788,7 @@ async def _upload_screens(
     # Handle image selection
 
     if using_custom_img_list:
-        image_glob: list[str] = custom_img_list
+        image_glob: list[str] = [str(screenshot_path / image) for image in custom_img_list]
         existing_images: list[ImageDict] = []
         existing_count = 0
     else:
@@ -722,17 +803,17 @@ async def _upload_screens(
             image_patterns = ["*.png", ".[!.]*.png"]
             image_glob = []
             for pattern in image_patterns:
-                glob_results = await asyncio.to_thread(lambda p=pattern: [str(path.relative_to(Path.cwd())) for path in Path.cwd().glob(p)])
+                glob_results = await asyncio.to_thread(lambda p=pattern: [str(path) for path in screenshot_path.glob(p)])
                 image_glob.extend(glob_results)
 
             unwanted_patterns = ["FILE*", "PLAYLIST*", "POSTER*"]
             unwanted_files: set[str] = set()
             for pattern in unwanted_patterns:
-                glob_results = await asyncio.to_thread(lambda p=pattern: [str(path.relative_to(Path.cwd())) for path in Path.cwd().glob(p)])
+                glob_results = await asyncio.to_thread(lambda p=pattern: [str(path) for path in screenshot_path.glob(p)])
                 unwanted_files.update(glob_results)
                 if pattern.startswith("FILE") or pattern.startswith("PLAYLIST") or pattern.startswith("POSTER"):
                     hidden_pattern = "." + pattern
-                    hidden_glob_results = await asyncio.to_thread(lambda hp=hidden_pattern: [str(path.relative_to(Path.cwd())) for path in Path.cwd().glob(hp)])
+                    hidden_glob_results = await asyncio.to_thread(lambda hp=hidden_pattern: [str(path) for path in screenshot_path.glob(hp)])
                     unwanted_files.update(hidden_glob_results)
 
             image_glob = [file for file in image_glob if file not in unwanted_files]
@@ -796,6 +877,7 @@ async def _upload_screens(
         return image_list, len(image_list)
 
     upload_tasks: list[tuple[int, str, str, dict[str, Any], Meta]] = [(index, image, img_host, config, meta) for index, image in enumerate(image_glob[:images_needed])]
+    return_dict["_stats_image_upload_attempts"] = int(return_dict.get("_stats_image_upload_attempts", 0) or 0) + len(upload_tasks)
 
     # Concurrency Control
     default_pool_size = len(upload_tasks)
@@ -904,6 +986,12 @@ async def _upload_screens(
             logger.error(f"[red]Error during uploads: {e!s}[/red]")
 
         successfully_uploaded = [(index, result) for index, result in results if result["status"] == "success"]
+        return_dict["_stats_image_upload_successes"] = int(return_dict.get("_stats_image_upload_successes", 0) or 0) + len(successfully_uploaded)
+        uploaded_bytes = 0
+        for index, _result in successfully_uploaded:
+            with contextlib.suppress(OSError):
+                uploaded_bytes += Path(upload_tasks[index][1]).stat().st_size
+        return_dict["_stats_image_upload_bytes"] = int(return_dict.get("_stats_image_upload_bytes", 0) or 0) + uploaded_bytes
         logger.debug(f"[blue]Successfully uploaded {len(successfully_uploaded)} out of {len(upload_tasks)} attempted uploads.[/blue]")
 
         # Ensure we only switch hosts if necessary
@@ -955,7 +1043,7 @@ async def _upload_screens(
         new_images: list[ImageDict] = []
         for _index, upload in successfully_uploaded:
             raw_url = upload["raw_url"]
-            new_image = {"img_url": upload["img_url"], "raw_url": raw_url, "web_url": upload["web_url"]}
+            new_image = {"img_url": upload["img_url"], "raw_url": raw_url, "web_url": upload["web_url"], "tags": image_tags(meta, custom=using_custom_img_list)}
             # Custom uploads (disc menus and spectrograms) are not added to
             # ``meta.image_list``.  Keep their local source so a tracker that
             # rejects the initially selected host can re-upload the same asset.
@@ -1002,7 +1090,6 @@ async def imgbox_upload(
 ) -> list[dict[str, str]]:
     """Upload images to Imgbox and store their returned URLs."""
     try:
-        os.chdir(chdir)
         image_list: list[dict[str, str]] = []
 
         async with pyimgbox.Gallery(thumb_width=350, square_thumbs=False) as gallery:
@@ -1027,7 +1114,7 @@ async def imgbox_upload(
                     logger.error(f"[red]Error during upload for {image}: {e!s}")
 
             for image in image_glob:
-                await process_image(image)
+                await process_image(str(Path(chdir) / image))
 
         return_dict["image_list"] = image_list
         return image_list

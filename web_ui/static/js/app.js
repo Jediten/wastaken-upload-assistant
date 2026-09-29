@@ -1,10 +1,14 @@
-const { useState, useRef, useEffect, useCallback } = React;
+const { useState, useRef, useEffect, useLayoutEffect, useCallback } = React;
 const THEME_KEY = "ua_config_theme";
 const LEFT_SIDEBAR_WIDTH_KEY = "ua_webui_left_sidebar_width_v2";
 const RIGHT_SIDEBAR_WIDTH_KEY = "ua_webui_right_sidebar_width";
 const COLLAPSED_ARGUMENT_SECTIONS_KEY = "ua_webui_collapsed_argument_sections";
 const FILE_BROWSER_CUSTOM_ORDER_KEY = "ua_webui_file_browser_custom_order";
+const FILE_BROWSER_EXPANDED_KEY = "ua_webui_file_browser_expanded";
+const FILE_BROWSER_SCROLL_KEY = "ua_webui_file_browser_scroll_top";
 const FILE_BROWSER_SORT_KEY = "ua_webui_file_browser_sort";
+const SHOW_AUDIO_TRACKS_KEY = "ua_webui_show_audio_tracks";
+const SHOW_SUBTITLE_TRACKS_KEY = "ua_webui_show_subtitle_tracks";
 const DEFAULT_LEFT_SIDEBAR_WIDTH = 256;
 const DEFAULT_RIGHT_SIDEBAR_WIDTH = 320;
 const APPLICATION_RAIL_WIDTH = 80;
@@ -221,6 +225,49 @@ const getStoredFileBrowserCustomOrder = () => {
   }
 };
 
+const getStoredExpandedFolders = () => {
+  try {
+    const paths = JSON.parse(storage.get(FILE_BROWSER_EXPANDED_KEY) || "[]");
+    return new Set(
+      Array.isArray(paths)
+        ? paths.filter((path) => typeof path === "string" && path)
+        : [],
+    );
+  } catch (_error) {
+    return new Set();
+  }
+};
+
+const sortFolderPathsByDepth = (paths) =>
+  [...paths].sort(
+    (a, b) =>
+      a.split(/[\\/]/).filter(Boolean).length -
+      b.split(/[\\/]/).filter(Boolean).length,
+  );
+
+const getFileBrowserRestorePaths = (paths, roots) => {
+  const restorePaths = new Set();
+  for (const path of paths) {
+    for (const root of roots) {
+      const prefix = root.path.replace(/[\\/]+$/, "");
+      const suffix = path.slice(prefix.length);
+      if (
+        path !== root.path &&
+        (!path.startsWith(prefix) || !/^[\\/]/.test(suffix))
+      )
+        continue;
+      restorePaths.add(root.path);
+      // A collapsed ancestor may still contain a previously open descendant.
+      for (const separator of suffix.matchAll(/[\\/]/g)) {
+        const parent = path.slice(0, prefix.length + separator.index);
+        if (parent.length > prefix.length) restorePaths.add(parent);
+      }
+      restorePaths.add(path);
+    }
+  }
+  return sortFolderPathsByDepth(restorePaths);
+};
+
 const getStoredFileBrowserSort = () => {
   const storedSort = storage.get(FILE_BROWSER_SORT_KEY) || "name-asc";
   const [by, order] = storedSort.split("-");
@@ -285,34 +332,50 @@ const apiFetch =
 
 const sanitizeHtml = window.sanitizeHtml;
 
-// Argument categories for the right sidebar (placeholders shown for info only)
-const argumentCategories = [
+const createUploadOutputFragment = (html) => {
+  const wrapper = document.createElement("div");
+  wrapper.innerHTML = sanitizeHtml(html);
+  // Rich output is dynamic HTML; apply targets after the sanitizer strips them.
+  wrapper.querySelectorAll("a[href]").forEach((link) => {
+    try {
+      const url = new URL(link.getAttribute("href"), window.location.href);
+      if (
+        (url.protocol === "http:" || url.protocol === "https:") &&
+        url.origin !== window.location.origin
+      ) {
+        link.target = "_blank";
+        link.rel = "noopener noreferrer";
+      }
+    } catch (_error) {
+      // Leave malformed and non-HTTP links to the existing sanitizer.
+    }
+  });
+  return wrapper;
+};
+
+// The CLI parser owns option names and help text. Keep only WebUI grouping and examples here.
+let argumentCategories = [
   {
     title: "Modes / Workflows",
     args: [
       {
         label: "--queue",
         placeholder: "QUEUE_NAME",
-        description: "Process a named queue from a folder path",
       },
       {
         label: "--limit-queue",
         placeholder: "N",
-        description: "Limit queue successful uploads",
       },
-      { label: "--site-check", description: "Site check (can it be uploaded)" },
+      { label: "--site-check" },
       {
         label: "--site-upload",
         placeholder: "TRACKER",
-        description: "Site upload (process site check content)",
       },
       {
         label: "--search_requests",
-        description: "Search supported site for matching requests (config)",
       },
       {
         label: "--unit3d",
-        description: "Upload from UNIT3D-Upload-Checker results",
       },
     ],
   },
@@ -323,44 +386,49 @@ const argumentCategories = [
       {
         label: "--poster",
         placeholder: "URL_OR_PATH",
-        description: "Artwork URL or local poster path for any category",
       },
       {
         label: "--banner",
         placeholder: "URL_OR_PATH",
-        description: "Artwork URL or local banner path for any category",
       },
       {
         label: "--category",
         placeholder: "MOVIE",
-        description: "Override detected category",
+      },
+      {
+        label: "--cast",
+        placeholder: "NAME1,NAME2",
+      },
+      {
+        label: "--genres",
+        placeholder: "GENRE1,GENRE2",
+      },
+      {
+        label: "--publisher",
+        placeholder: "NAME",
       },
       {
         label: "--type",
         placeholder: "REMUX",
-        description: "Override detected type",
       },
       {
         label: "--source",
         placeholder: "Blu-ray",
-        description: "Override detected source",
       },
       {
         label: "--resolution",
         placeholder: "2160p",
-        description: "Override detected resolution",
       },
-      { label: "--tmdb", placeholder: "movie/123", description: "TMDb id" },
-      { label: "--imdb", placeholder: "tt0111161", description: "IMDb id" },
-      { label: "--mal", placeholder: "ID", description: "MAL id" },
-      { label: "--tvmaze", placeholder: "ID", description: "TVMaze id" },
-      { label: "--tvdb", placeholder: "ID", description: "TVDB id" },
-      { label: "--douban", placeholder: "ID", description: "Douban id" },
-      { label: "--igdb", placeholder: "ID", description: "IGDB id" },
+      { label: "--tmdb", placeholder: "movie/123" },
+      { label: "--imdb", placeholder: "tt0111161" },
+      { label: "--mal", placeholder: "ID" },
+      { label: "--tvmaze", placeholder: "ID" },
+      { label: "--tvdb", placeholder: "ID" },
+      { label: "--douban", placeholder: "ID" },
+      { label: "--igdb", placeholder: "ID" },
       {
         label: "--steam",
         placeholder: "APP_ID_OR_URL",
-        description: "Steam app id or URL",
       },
     ],
   },
@@ -370,75 +438,59 @@ const argumentCategories = [
       {
         label: "--music-artist",
         placeholder: "ARTIST",
-        description: "Override the main artist(s)",
       },
       {
         label: "--music-album",
         placeholder: "TITLE",
-        description: "Override the album or release title",
       },
       {
         label: "--music-media",
         placeholder: "MEDIUM",
-        description:
-          "Source medium (CD, WEB, Vinyl, DVD, BD, Soundboard, SACD, DAT, Cassette)",
       },
       {
         label: "--music-release-type",
         placeholder: "ALBUM / EP / SINGLE",
-        description: "Release type",
       },
       {
         label: "--music-release-year",
         placeholder: "YYYY",
-        description: "Concrete release or pressing year",
       },
       {
         label: "--music-edition-year",
         placeholder: "YYYY",
-        description: "Remaster, reissue, or edition year",
       },
       {
         label: "--music-label",
         placeholder: "LABEL",
-        description: "Record label",
       },
       {
         label: "--music-catalogue-number",
         placeholder: "CATALOGUE",
-        description: "Catalogue number",
       },
       {
         label: "--music-genre",
         placeholder: "GENRE1,GENRE2",
-        description: "Comma-separated genre override",
       },
       {
         label: "--music-discogs-id",
         placeholder: "ID_OR_URL",
-        description: "Discogs release or master reference",
       },
       {
         label: "--music-discogs-release-id",
         placeholder: "ID_OR_URL",
-        description: "Exact Discogs release reference",
       },
       {
         label: "--music-discogs-master-id",
         placeholder: "ID_OR_URL",
-        description: "Exact Discogs master reference",
       },
       {
         label: "--no-music-discogs",
-        description: "Disable Discogs lookup and metadata",
       },
       {
         label: "--music-enrich",
-        description: "Enable bounded MusicBrainz enrichment",
       },
       {
         label: "--no-music-enrich",
-        description: "Disable MusicBrainz enrichment",
       },
     ],
   },
@@ -448,96 +500,91 @@ const argumentCategories = [
       {
         label: "--screens",
         placeholder: "N",
-        description: "Number of screenshots to use",
       },
       {
         label: "--manual_frames",
         placeholder: '"1,250,500"',
-        description: "Manual frame numbers for screenshots",
       },
       {
         label: "--comparison",
         placeholder: "PATH",
-        description: "Comparison images folder",
       },
       {
         label: "--comparison_index",
         placeholder: "N",
-        description: "Comparison main index",
       },
       {
         label: "--imghost",
         placeholder: "HOST",
-        description: "Specific image host to use",
       },
       {
         label: "--skip-imagehost-upload",
-        description: "Skip uploading screenshots",
       },
     ],
   },
   {
     title: "TV Fields",
     args: [
-      { label: "--season", placeholder: "S01", description: "Season number" },
-      { label: "--episode", placeholder: "E01", description: "Episode number" },
+      { label: "--season", placeholder: "S01" },
+      { label: "--episode", placeholder: "E01" },
       {
         label: "--manual-episode-title",
         placeholder: "TITLE",
-        description: "Manual episode title",
       },
       {
         label: "--daily",
         placeholder: "YYYY-MM-DD",
-        description: "Air date for daily shows",
       },
     ],
   },
   {
     title: "Title Shaping",
     args: [
-      { label: "--year", placeholder: "YYYY", description: "Override year" },
-      { label: "--no-season", description: "Remove season" },
-      { label: "--no-year", description: "Remove year" },
-      { label: "--no-aka", description: "Remove AKA" },
-      { label: "--no-dub", description: "Remove Dubbed" },
-      { label: "--no-dual", description: "Remove Dual-Audio" },
-      { label: "--no-tag", description: "Remove group tag" },
-      { label: "--no-edition", description: "Remove edition" },
-      { label: "--dual-audio", description: "Add Dual-Audio" },
-      { label: "--tag", placeholder: "GROUP", description: "Group tag" },
+      { label: "--year", placeholder: "YYYY" },
+      {
+        label: "--name",
+        placeholder: "RELEASE_NAME",
+      },
+      { label: "--no-season" },
+      { label: "--no-year" },
+      { label: "--no-aka" },
+      { label: "--no-dub" },
+      { label: "--no-dual" },
+      { label: "--no-tag" },
+      { label: "--no-edition" },
+      { label: "--dual-audio" },
+      { label: "--tag", placeholder: "GROUP" },
       {
         label: "--service",
         placeholder: "SERVICE",
-        description: "Streaming service",
       },
-      { label: "--region", placeholder: "REGION", description: "Disc Region" },
+      { label: "--region", placeholder: "REGION" },
       {
         label: "--edition",
         placeholder: "TEXT",
-        description: "Edition marker",
       },
-      { label: "--repack", placeholder: "TEXT", description: "Repack" },
+      { label: "--repack", placeholder: "TEXT" },
     ],
   },
   {
     title: "Description / NFO",
     args: [
       {
+        label: "--overview",
+        placeholder: "SYNOPSIS",
+      },
+      {
         label: "--desclink",
         placeholder: "URL",
-        description: "Link to pastebin/hastebin with description",
       },
       {
         label: "--descfile",
         placeholder: "PATH",
-        description: "Path to description file (.txt, .nfo, .md)",
       },
-      { label: "--nfo", description: "Use .nfo for description" },
+      { label: "--nfo" },
       {
         label: "--keywords",
         placeholder: "keyword1,keyword2",
-        description: "Comma-separated keywords",
       },
     ],
   },
@@ -547,50 +594,41 @@ const argumentCategories = [
       {
         label: "--original-language",
         placeholder: "en",
-        description: "Original language of content",
       },
       {
         label: "--only-if-languages",
         placeholder: "en,fr",
-        description:
-          "Only proceed with upload if the content has these languages",
       },
     ],
   },
   {
     title: "Misc Metadata Flags",
     args: [
-      { label: "--commentary", description: "Commentary" },
-      { label: "--sfx-subtitles", description: "SFX subtitles" },
-      { label: "--extras", description: "Extras included" },
+      { label: "--commentary" },
+      { label: "--sfx-subtitles" },
+      { label: "--extras" },
       {
         label: "--distributor",
         placeholder: "NAME",
-        description: "Disc distributor",
       },
       {
         label: "--disctype",
         placeholder: "BD50",
-        description: "Disc type override",
       },
-      { label: "--untouched", description: "Mark as untouched disc" },
-      { label: "--menus", description: "Path to menus screenshots (PNGs)" },
+      { label: "--untouched" },
+      { label: "--menus" },
       {
         label: "--manual_dvds",
         placeholder: "2xDVD9+DVD5",
-        description: "Override the default number of DVDs",
       },
       {
         label: "--sorted-filelist",
-        description: "Sorted filelist (handles typical anime nonsense)",
       },
       {
         label: "--keep-folder",
-        description: "Keep top folder with single file uploads",
       },
       {
         label: "--keep-nfo",
-        description: "Keep nfo (extremely site specific)",
       },
     ],
   },
@@ -600,44 +638,32 @@ const argumentCategories = [
       {
         label: "--author",
         placeholder: "AUTHOR",
-        description: "Override detected book author",
       },
       {
         label: "--book-title",
         placeholder: "TITLE",
-        description: "Override detected book title",
       },
       {
-        label: "--book-overview",
-        placeholder: "SYNOPSIS",
-        description:
-          "Book/Audiobook overview/synopsis (overrides auto-detected value)",
+        label: "--book-narrator",
+        placeholder: "NAME",
       },
-      { label: "--comic", description: "Mark upload as comic" },
-      { label: "--manga", description: "Mark upload as manga" },
-      { label: "--magazine", description: "Mark upload as magazine" },
-      { label: "--newspaper", description: "Mark upload as newspaper" },
+      { label: "--comic" },
+      { label: "--manga" },
+      { label: "--magazine" },
+      { label: "--newspaper" },
       {
         label: "--book-translator",
         placeholder: "NAME",
-        description: "Book translator",
       },
       {
         label: "--book-language",
         placeholder: "LANG",
-        description: "Book language",
       },
-      { label: "--isbn", placeholder: "ISBN", description: "ISBN identifier" },
-      { label: "--asin", placeholder: "ASIN", description: "Amazon ASIN" },
+      { label: "--isbn", placeholder: "ISBN" },
+      { label: "--asin", placeholder: "ASIN" },
       {
         label: "--openlibrary",
         placeholder: "ID",
-        description: "OpenLibrary id",
-      },
-      {
-        label: "--publisher",
-        placeholder: "NAME",
-        description: "Book publisher",
       },
     ],
   },
@@ -645,26 +671,30 @@ const argumentCategories = [
     title: "Games",
     args: [
       {
+        label: "--game-title",
+        placeholder: "TITLE",
+      },
+      {
+        label: "--developer",
+        placeholder: "NAME",
+      },
+      {
         label: "--platform",
         placeholder: "PC",
-        description: "Primary platform override",
       },
       {
         label: "--platforms",
         placeholder: "PC,PS5",
-        description: "Platforms list",
       },
       {
         label: "--game-version",
         placeholder: "v1.0",
-        description: "Game version",
       },
       {
         label: "--game-subcategory",
         placeholder: "dlc",
-        description: "Game subcategory",
       },
-      { label: "--multi", description: "Force a MULTI language tag" },
+      { label: "--multi" },
     ],
   },
   {
@@ -674,39 +704,69 @@ const argumentCategories = [
     args: [
       {
         label: "--onlyID",
-        description: "Only grab meta ids, not descriptions",
-      },
-      { label: "--ptp", placeholder: "ID_OR_URL", description: "PTP id/link" },
-      { label: "--blu", placeholder: "ID_OR_URL", description: "BLU id/link" },
-      {
-        label: "--aither",
-        placeholder: "ID_OR_URL",
-        description: "Aither id/link",
-      },
-      { label: "--lst", placeholder: "ID_OR_URL", description: "LST id/link" },
-      { label: "--oe", placeholder: "ID_OR_URL", description: "OE id/link" },
-      { label: "--hdb", placeholder: "ID_OR_URL", description: "HDB id/link" },
-      { label: "--btn", placeholder: "ID_OR_URL", description: "BTN id/link" },
-      { label: "--bhd", placeholder: "ID_OR_URL", description: "BHD id/link" },
-      {
-        label: "--orpheus",
-        placeholder: "ID_OR_URL",
-        description: "Orpheus id/link for music metadata enrichment",
       },
       {
-        label: "--huno",
-        placeholder: "ID_OR_URL",
-        description: "HUNO id/link",
+        label: "--tracker-id",
+        placeholder: "TRACKER=ID or URL",
       },
       {
-        label: "--ulcx",
-        placeholder: "ID_OR_URL",
-        description: "ULCX id/link",
+        label: "PTP reference",
+        insert: "--tracker-id PTP=",
+        description: "PTP torrent ID",
+      },
+      {
+        label: "BLU reference",
+        insert: "--tracker-id BLU=",
+        description: "BLU torrent ID",
+      },
+      {
+        label: "Aither reference",
+        insert: "--tracker-id AITHER=",
+        description: "Aither torrent ID",
+      },
+      {
+        label: "LST reference",
+        insert: "--tracker-id LST=",
+        description: "LST torrent ID",
+      },
+      {
+        label: "OE reference",
+        insert: "--tracker-id OE=",
+        description: "OE torrent ID",
+      },
+      {
+        label: "HDB reference",
+        insert: "--tracker-id HDB=",
+        description: "HDB torrent ID",
+      },
+      {
+        label: "BTN reference",
+        insert: "--tracker-id BTN=",
+        description: "BTN torrent ID",
+      },
+      {
+        label: "BHD reference",
+        insert: "--tracker-id BHD=",
+        description: "BHD torrent ID",
+      },
+      {
+        label: "Orpheus reference",
+        insert: "--tracker-id ORPHEUS=",
+        description: "Orpheus torrent ID for music metadata enrichment",
+      },
+      {
+        label: "HUNO reference",
+        insert: "--tracker-id HUNO=",
+        description: "HUNO torrent ID",
+      },
+      {
+        label: "ULCX reference",
+        insert: "--tracker-id ULCX=",
+        description: "ULCX torrent ID",
       },
       {
         label: "--torrenthash",
         placeholder: "HASH",
-        description: "(qBitTorrent only) Get site id from Torrent hash",
       },
     ],
   },
@@ -716,50 +776,38 @@ const argumentCategories = [
       {
         label: "--trackers",
         placeholder: "aither,blutopia,lst,etc",
-        description: "Specific Trackers list for uploading",
       },
       {
         label: "--trackers-remove",
         placeholder: "blutopia,xyz,etc",
-        description:
-          "Remove these trackers from the default list for this upload",
       },
       {
         label: "--trackers-pass",
         placeholder: "N",
-        description:
-          "How many trackers need to pass all checks for upload to proceed",
       },
       {
         label: "--skip_auto_torrent",
-        description: "Skip auto torrent searching",
       },
-      { label: "--skip-dupe-check", description: "Skip dupe check" },
+      { label: "--skip-dupe-check" },
       {
         label: "--skip-dupe-asking",
-        description: "Accept any reported dupes without prompting about it",
       },
       {
         label: "--double-dupe-check",
-        description: "Run another dupe check right before upload",
       },
       {
         label: "--dupe-size-difference-tolerance",
         placeholder: "PERCENTAGE",
-        description: "Ignore dupes with size difference >= percentage",
       },
       {
         label: "--draft",
-        description: "Send to Draft at supported sites (config)",
       },
       {
         label: "--modq",
-        description: "Send to modQ at supported sites (config)",
       },
       {
         label: "--freeleech",
         placeholder: "25%",
-        description: "Mark upload as Freeleech (percentage)",
       },
     ],
   },
@@ -768,51 +816,43 @@ const argumentCategories = [
     args: [
       {
         label: "--anon",
-        description: "Anon upload at supported sites (config)",
       },
-      { label: "--no-seed", description: "Don't send torrents to client" },
-      { label: "--stream", description: "Stream" },
-      { label: "--webdv", description: "Dolby Vision hybrid" },
+      { label: "--no-seed" },
+      { label: "--stream" },
+      { label: "--webdv" },
       {
         label: "--hardcoded-subs",
-        description: "Release contains hardcoded subs",
       },
-      { label: "--personalrelease", description: "Personal release" },
+      { label: "--personalrelease" },
     ],
   },
   {
     title: "Tracker / Site Specific",
     args: [
-      { label: "--foreign", description: "CINEMATIK foreign category" },
-      { label: "--opera", description: "CINEMATIK opera and musical category" },
-      { label: "--asian", description: "CINEMATIK Asian category" },
+      { label: "--foreign" },
+      { label: "--opera" },
+      { label: "--asian" },
       {
         label: "--exclusive",
         placeholder: "1",
-        description: "Set exclusive flag where supported",
       },
-      { label: "--featured", description: "Mark upload as Featured (UNIT3D)" },
+      { label: "--featured" },
       {
         label: "--double-upload",
-        description: "Mark upload as Double Upload (UNIT3D)",
       },
       {
         label: "--double-upload-until",
         placeholder: "N",
-        description: "Double upload duration in days (UNIT3D)",
       },
       {
         label: "--freeleech-until",
         placeholder: "N",
-        description: "Freeleech duration in days (UNIT3D)",
       },
       {
         label: "--refundable",
-        description: "Mark upload as Refundable (UNIT3D)",
       },
       {
         label: "--sticky",
-        description: "Mark upload as Sticky / pinned (UNIT3D)",
       },
     ],
   },
@@ -822,36 +862,27 @@ const argumentCategories = [
       {
         label: "--max-piece-size",
         placeholder: "N",
-        description: "Max piece size (in MiB) of created torrent (1 <> 128)",
       },
       {
         label: "--nohash",
-        description: "Don't rehash torrent even if it was needed",
       },
       {
         label: "--rehash",
-        description:
-          "Create a fresh torrent from the actual data, not an existing .torrent file",
       },
       {
         label: "--mkbrr",
-        description: "Use mkbrr for torrent creation (config)",
       },
       {
         label: "--vapoursynth",
-        description: "Use VapourSynth for screenshots",
       },
-      { label: "--entropy", placeholder: "N", description: "Entropy" },
-      { label: "--randomized", placeholder: "N", description: "Randomized" },
+      { label: "--entropy", placeholder: "N" },
+      { label: "--randomized", placeholder: "N" },
       {
         label: "--infohash",
         placeholder: "HASH",
-        description: "Use this Infohash as the existing torrent from client",
       },
       {
         label: "--force-recheck",
-        description:
-          "(qBitTorrent only) Force recheck the file in client before upload",
       },
     ],
   },
@@ -861,36 +892,29 @@ const argumentCategories = [
       {
         label: "--client",
         placeholder: "NAME",
-        description: "Client name (config)",
       },
       {
         label: "--qbit-tag",
         placeholder: "TAG",
-        description: "qBittorrent tag (config)",
       },
       {
         label: "--qbit-cat",
         placeholder: "CATEGORY",
-        description: "qBittorrent category (config)",
       },
       {
         label: "--qbit-bw-control",
-        description: "Enable qBittorrent bandwidth control",
       },
       {
         label: "--qbit-bw-threshold",
         placeholder: "KiB/s",
-        description: "qBittorrent bandwidth threshold",
       },
       {
         label: "--qbit-bw-time",
         placeholder: "SECONDS",
-        description: "qBittorrent bandwidth wait time",
       },
       {
         label: "--rtorrent-label",
         placeholder: "LABEL",
-        description: "rTorrent label (config)",
       },
     ],
   },
@@ -899,27 +923,23 @@ const argumentCategories = [
     args: [
       {
         label: "--delete-meta",
-        description: "Delete only meta.json from tmp folder",
       },
       {
         label: "--delete-tmp",
-        description: "Delete the tmp folder associated with this upload",
       },
-      { label: "--cleanup", description: "Cleanup the entire UA tmp folder" },
+      { label: "--cleanup" },
     ],
   },
   {
     title: "Debug / Output",
     args: [
-      { label: "--debug", description: "Debug mode" },
-      { label: "--ffdebug", description: "FFmpeg debug" },
+      { label: "--debug" },
+      { label: "--ffdebug" },
       {
         label: "--upload-order",
         placeholder: "tracker1,tracker2",
-        description: "Preferred upload order",
       },
-      { label: "--webui", description: "Launch the WebUI mode" },
-      { label: "--upload-timer", description: "Upload timer (config)" },
+      { label: "--upload-timer" },
     ],
   },
   {
@@ -940,15 +960,11 @@ const argumentCategories = [
       },
       {
         label: "--audio-spectrogram",
-        description:
-          "Generate spectrograms; without a stream selection, the workflow will ask which streams to use.",
       },
       {
         label: "--audio-spectrogram-tracks",
         placeholder: "0,1 or all",
         insert: "--audio-spectrogram --audio-spectrogram-tracks all",
-        description:
-          "Preset inserts a valid selection. Replace 'all' with zero-based positions in the command field if needed.",
       },
     ],
   },
@@ -959,8 +975,6 @@ const argumentCategories = [
     args: [
       {
         label: "--dynamic-hdr-plot",
-        description:
-          "Generate and upload Dolby Vision and HDR10+ metadata plots. Required tools download automatically on first use.",
       },
     ],
   },
@@ -969,23 +983,23 @@ const argumentCategories = [
     args: [
       {
         label: "--not-anime",
-        description: "Can speed up tv data extraction when not anime content",
       },
       {
         label: "--channel",
         placeholder: "ID_OR_TAG",
-        description: "SPD channel",
       },
-      { label: "--usenet", description: "Upload files to Usenet (NNTP)" },
+      { label: "--usenet" },
       {
         label: "--usenet-subject",
         placeholder: "TEXT",
-        description: "Custom Usenet subject line",
       },
       {
         label: "--archive-password",
         placeholder: "PASSWORD or random",
-        description: "Override the Usenet 7z archive password for this run",
+      },
+      {
+        label: "--usenet-episodes-only",
+        placeholder: "CURUPIRA,NZBNEST",
       },
       {
         label: "--unattended",
@@ -1000,18 +1014,40 @@ const argumentCategories = [
   },
 ];
 
+const cliArguments = Array.isArray(window.UA_CLI_ARGUMENTS)
+  ? window.UA_CLI_ARGUMENTS
+  : [];
+if (cliArguments.length > 0) {
+  const cliByLabel = new Map(cliArguments.map((arg) => [arg.label, arg]));
+  const listedFlags = new Set();
+  argumentCategories = argumentCategories.map((category) => ({
+    ...category,
+    args: category.args
+      .filter(
+        (item) => !item.label.startsWith("--") || cliByLabel.has(item.label),
+      )
+      .map((item) => {
+        const cli = cliByLabel.get(item.label);
+        if (!cli) return item; // WebUI command presets have their own instructions.
+        listedFlags.add(item.label);
+        return {
+          ...item,
+          description: cli.description || item.description,
+          placeholder: item.placeholder || cli.placeholder,
+        };
+      }),
+  }));
+  const remaining = cliArguments.filter(
+    (arg) => !listedFlags.has(arg.label) && arg.description,
+  );
+  if (remaining.length > 0) {
+    argumentCategories.push({ title: "Other CLI options", args: remaining });
+  }
+}
+
 // Icon components
-const WebUiIcon = ({ name, className = "w-5 h-5" }) => (
-  <span
-    aria-hidden="true"
-    className={`inline-block flex-none ${className}`}
-    style={{
-      backgroundColor: "currentColor",
-      mask: `url(/static/img/webui-icons/${name}.svg) center / contain no-repeat`,
-      WebkitMask: `url(/static/img/webui-icons/${name}.svg) center / contain no-repeat`,
-    }}
-  />
-);
+const LucideIcon = window.UALucideIcon;
+const WebUiIcon = LucideIcon;
 
 const FolderIcon = () => (
   <WebUiIcon name="file-structure" className="w-4 h-4" />
@@ -1020,130 +1056,30 @@ const FolderIcon = () => (
 const ScreenshotsIcon = () => <WebUiIcon name="screenshots" />;
 
 const FolderOpenIcon = () => (
-  <svg
-    className="w-4 h-4"
-    fill="none"
-    stroke="currentColor"
-    viewBox="0 0 24 24"
-  >
-    <path
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      strokeWidth={2}
-      d="M5 19a2 2 0 01-2-2V7a2 2 0 012-2h4l2 2h4a2 2 0 012 2v1M5 19h14a2 2 0 002-2v-5a2 2 0 00-2-2H9a2 2 0 00-2 2v5a2 2 0 01-2 2z"
-    />
-  </svg>
+  <LucideIcon name="folder-open" className="w-4 h-4" />
 );
 
-const FileIcon = () => (
-  <svg
-    className="w-4 h-4"
-    fill="none"
-    stroke="currentColor"
-    viewBox="0 0 24 24"
-  >
-    <path
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      strokeWidth={2}
-      d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"
-    />
-  </svg>
-);
+const FileIcon = () => <LucideIcon name="file-text" className="w-4 h-4" />;
 
 const TerminalIcon = () => (
-  <svg
-    className="w-5 h-5"
-    fill="none"
-    stroke="currentColor"
-    viewBox="0 0 24 24"
-  >
-    <path
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      strokeWidth={2}
-      d="M8 9l3 3-3 3m5 0h3M5 20h14a2 2 0 002-2V6a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"
-    />
-  </svg>
+  <LucideIcon name="square-terminal" className="w-5 h-5" />
 );
 
 const PaletteIcon = () => <WebUiIcon name="palette" />;
 
-const SettingsIcon = () => <WebUiIcon name="settings" />;
+const SettingsIcon = () => <WebUiIcon name="config" />;
 
-const HelpIcon = () => (
-  <svg
-    className="h-5 w-5"
-    fill="none"
-    stroke="currentColor"
-    viewBox="0 0 24 24"
-    aria-hidden="true"
-  >
-    <path
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      strokeWidth={2}
-      d="M12 6.75c-2.5-1.5-5.5-1.5-8-.5v11c2.5-1 5.5-1 8 .5m0-11c2.5-1.5 5.5-1.5 8-.5v11c-2.5-1-5.5-1-8 .5m0-11v11"
-    />
-  </svg>
-);
+const HelpIcon = () => <WebUiIcon name="help" />;
 
-const UpdateIcon = () => (
-  <svg
-    className="h-5 w-5"
-    fill="none"
-    stroke="currentColor"
-    viewBox="0 0 24 24"
-    aria-hidden="true"
-  >
-    <path
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      strokeWidth={2}
-      d="M12 3v12m0 0 4-4m-4 4-4-4M5 21h14"
-    />
-  </svg>
-);
+const UpdateIcon = () => <LucideIcon name="download" className="h-5 w-5" />;
 
-const ChangelogIcon = () => (
-  <svg
-    className="h-5 w-5"
-    fill="none"
-    stroke="currentColor"
-    viewBox="0 0 24 24"
-    aria-hidden="true"
-  >
-    <circle cx="12" cy="12" r="9" strokeWidth={2} />
-    <path
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      strokeWidth={2}
-      d="M12 7v5l3 2"
-    />
-  </svg>
-);
+const ChangelogIcon = () => <WebUiIcon name="changelog" />;
 
-const UploadRailIcon = () => (
-  <svg fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
-    <path
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      strokeWidth={2}
-      d="M12 16V4m0 0L7 9m5-5 5 5M5 20h14"
-    />
-  </svg>
-);
+const StatsIcon = () => <WebUiIcon name="stats" />;
 
-const LogoutIcon = () => (
-  <svg fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
-    <path
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      strokeWidth={2}
-      d="M10 17l5-5-5-5m5 5H3m10-8h5a2 2 0 012 2v12a2 2 0 01-2 2h-5"
-    />
-  </svg>
-);
+const UploadRailIcon = () => <WebUiIcon name="upload" />;
+
+const LogoutIcon = () => <WebUiIcon name="logout" />;
 
 const WorkspaceSwitcher = ({
   activeWorkspace,
@@ -1154,6 +1090,7 @@ const WorkspaceSwitcher = ({
   const workspaces = [
     { id: "upload", label: "Upload", href: `${appBase}/` },
     { id: "config", label: "Configuration", href: `${appBase}/config` },
+    { id: "stats", label: "Stats", href: `${appBase}/stats` },
   ];
 
   return (
@@ -1183,6 +1120,7 @@ const WorkspaceSwitcher = ({
 };
 
 const ApplicationRail = ({
+  trackers,
   activeWorkspace,
   appBase,
   appearanceControl,
@@ -1203,6 +1141,12 @@ const ApplicationRail = ({
       label: "Config",
       href: `${appBase}/config`,
       icon: <SettingsIcon />,
+    },
+    {
+      id: "stats",
+      label: "Stats",
+      href: `${appBase}/stats`,
+      icon: <StatsIcon />,
     },
   ];
 
@@ -1246,6 +1190,7 @@ const ApplicationRail = ({
       <div className="min-h-4 flex-1"></div>
 
       <div className="ua-app-rail-footer grid shrink-0 gap-1 border-t p-2">
+        <window.UAApiKeyAlerts trackers={trackers} appBase={appBase} />
         <button
           type="button"
           className={`ua-app-rail-button rounded-lg ${updateStatus?.update_available ? "ua-update-rail-button" : ""}`}
@@ -1397,19 +1342,7 @@ function UploadHelpResourcesModal({
             data-ua-modal-initial-focus
             onClick={onClose}
           >
-            <svg
-              className="h-4 w-4"
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              aria-hidden="true"
-            >
-              <path
-                d="M6 6l12 12M18 6L6 18"
-                strokeWidth="2"
-                strokeLinecap="round"
-              />
-            </svg>
+            <LucideIcon name="x" className="h-4 w-4" />
           </button>
         </div>
 
@@ -1465,9 +1398,10 @@ function UploadHelpResourcesModal({
                           {link.description}
                         </span>
                       </span>
-                      <span className="shrink-0 text-sm" aria-hidden="true">
-                        ↗
-                      </span>
+                      <LucideIcon
+                        name="external-link"
+                        className="h-4 w-4 shrink-0"
+                      />
                     </a>
                   ))}
                 </div>
@@ -1483,7 +1417,8 @@ function UploadHelpResourcesModal({
             rel="noopener noreferrer"
             className="ua-upload-modal-action rounded-lg px-4 py-2 text-sm font-semibold"
           >
-            Browse all documentation ↗
+            Browse all documentation
+            <LucideIcon name="external-link" className="ml-2 h-4 w-4" />
           </a>
         </div>
       </section>
@@ -1492,19 +1427,7 @@ function UploadHelpResourcesModal({
 }
 
 const ProgressIcon = () => (
-  <svg
-    className="w-5 h-5"
-    fill="none"
-    stroke="currentColor"
-    viewBox="0 0 24 24"
-  >
-    <path
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      strokeWidth={2}
-      d="M4 19V5m0 14h16M8 16v-4m4 4V8m4 8v-7"
-    />
-  </svg>
+  <LucideIcon name="chart-column-increasing" className="w-5 h-5" />
 );
 
 const MovieIcon = () => <WebUiIcon name="movie" />;
@@ -1516,6 +1439,8 @@ const GameIcon = () => <WebUiIcon name="gamepad" />;
 const BookIcon = () => <WebUiIcon name="book" />;
 
 const DiscIcon = () => <WebUiIcon name="music" />;
+
+const PepperIcon = () => <WebUiIcon name="pepper" />;
 
 const mediaIconForCategory = (category) => {
   switch (String(category || "").toUpperCase()) {
@@ -1529,80 +1454,20 @@ const mediaIconForCategory = (category) => {
       return <BookIcon />;
     case "MUSIC":
       return <DiscIcon />;
+    case "XXX":
+      return <PepperIcon />;
     default:
       return <FileIcon />;
   }
 };
 
-const PlayIcon = () => (
-  <svg
-    className="w-4 h-4"
-    fill="none"
-    stroke="currentColor"
-    viewBox="0 0 24 24"
-  >
-    <path
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      strokeWidth={2}
-      d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z"
-    />
-    <path
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      strokeWidth={2}
-      d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z"
-    />
-  </svg>
-);
+const PlayIcon = () => <LucideIcon name="circle-play" className="w-4 h-4" />;
 
-const PlusIcon = () => (
-  <svg
-    className="w-4 h-4"
-    fill="none"
-    stroke="currentColor"
-    viewBox="0 0 24 24"
-  >
-    <path
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      strokeWidth={2}
-      d="M12 5v14m-7-7h14"
-    />
-  </svg>
-);
+const PlusIcon = () => <LucideIcon name="plus" className="w-4 h-4" />;
 
-const ExpandIcon = () => (
-  <svg
-    className="w-4 h-4"
-    fill="none"
-    stroke="currentColor"
-    viewBox="0 0 24 24"
-  >
-    <path
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      strokeWidth={2}
-      d="M8 3H3v5m13-5h5v5M8 21H3v-5m18 0v5h-5"
-    />
-  </svg>
-);
+const ExpandIcon = () => <LucideIcon name="maximize-2" className="w-4 h-4" />;
 
-const TrashIcon = () => (
-  <svg
-    className="w-4 h-4"
-    fill="none"
-    stroke="currentColor"
-    viewBox="0 0 24 24"
-  >
-    <path
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      strokeWidth={2}
-      d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"
-    />
-  </svg>
-);
+const TrashIcon = () => <LucideIcon name="trash-2" className="w-4 h-4" />;
 
 const LogoIcon = ({ src, className = "w-6 h-6" }) => (
   <img
@@ -1613,118 +1478,28 @@ const LogoIcon = ({ src, className = "w-6 h-6" }) => (
 );
 
 const ChevronDownIcon = () => (
-  <svg
-    className="w-4 h-4"
-    fill="none"
-    stroke="currentColor"
-    viewBox="0 0 24 24"
-  >
-    <path
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      strokeWidth={2}
-      d="M19 9l-7 7-7-7"
-    />
-  </svg>
+  <LucideIcon name="chevron-down" className="w-4 h-4" />
 );
 
 const ChevronRightIcon = () => (
-  <svg
-    className="w-4 h-4"
-    fill="none"
-    stroke="currentColor"
-    viewBox="0 0 24 24"
-  >
-    <path
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      strokeWidth={2}
-      d="M9 5l7 7-7 7"
-    />
-  </svg>
+  <LucideIcon name="chevron-right" className="w-4 h-4" />
 );
 
-const SearchIcon = () => (
-  <svg
-    className="w-4 h-4"
-    fill="none"
-    stroke="currentColor"
-    viewBox="0 0 24 24"
-  >
-    <path
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      strokeWidth={2}
-      d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"
-    />
-  </svg>
-);
+const SearchIcon = () => <LucideIcon name="search" className="w-4 h-4" />;
 
 const CollapseAllIcon = () => (
-  <svg
-    className="w-4 h-4"
-    fill="none"
-    stroke="currentColor"
-    viewBox="0 0 24 24"
-  >
-    <path
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      strokeWidth={2}
-      d="M4 8V4m0 0h4M4 4l5 5m11-1V4m0 0h-4m4 0l-5 5M4 16v4m0 0h4m-4 0l5-5m11 5l-5-5m5 5v-4m0 4h-4"
-    />
-  </svg>
+  <LucideIcon name="minimize-2" className="w-4 h-4" />
 );
 
 const ExpandAllIcon = () => (
-  <svg
-    className="w-4 h-4"
-    fill="none"
-    stroke="currentColor"
-    viewBox="0 0 24 24"
-  >
-    <path
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      strokeWidth={2}
-      d="M4 8V4m0 0h4M4 4l5 5m11-1V4m0 0h-4m4 0l-5 5M4 16v4m0 0h4m-4 0l5-5m11 5l-5-5m5 5v-4m0 4h-4"
-    />
-  </svg>
+  <LucideIcon name="maximize-2" className="w-4 h-4" />
 );
 
 const SpinnerIcon = () => (
-  <svg className="w-4 h-4 animate-spin" fill="none" viewBox="0 0 24 24">
-    <circle
-      className="opacity-25"
-      cx="12"
-      cy="12"
-      r="10"
-      stroke="currentColor"
-      strokeWidth="4"
-    ></circle>
-    <path
-      className="opacity-75"
-      fill="currentColor"
-      d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"
-    ></path>
-  </svg>
+  <LucideIcon name="loader-circle" className="w-4 h-4 animate-spin" />
 );
 
-const RefreshIcon = () => (
-  <svg
-    className="w-4 h-4"
-    fill="none"
-    stroke="currentColor"
-    viewBox="0 0 24 24"
-  >
-    <path
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      strokeWidth={2}
-      d="M20 11a8.1 8.1 0 00-14.8-4.5L3 9m0 0V4m0 5h5M4 13a8.1 8.1 0 0014.8 4.5L21 15m0 0v5m0-5h-5"
-    />
-  </svg>
-);
+const RefreshIcon = () => <LucideIcon name="refresh-cw" className="w-4 h-4" />;
 
 const metadataProviderStyles = {
   tmdb: {
@@ -1767,6 +1542,10 @@ const metadataProviderStyles = {
     light: "border-orange-300 bg-transparent text-orange-900",
     dark: "border-orange-900/80 bg-transparent text-orange-100",
   },
+  audible: {
+    light: "border-[#F7991C] bg-transparent text-[#9A4F00]",
+    dark: "border-[#F7991C]/75 bg-transparent text-[#FFD6A3]",
+  },
   musicbrainz: {
     light: "border-[#BA478F] bg-transparent text-[#7D205D]",
     dark: "border-[#BA478F]/75 bg-transparent text-[#F4C7E4]",
@@ -1782,8 +1561,11 @@ const metadataProviderStyles = {
 };
 
 const getMetadataProviderStyle = (key, isDarkMode) => {
+  const normalizedKey = String(key || "").startsWith("discogs_")
+    ? "discogs"
+    : key;
   const providerStyle =
-    metadataProviderStyles[key] || metadataProviderStyles.default;
+    metadataProviderStyles[normalizedKey] || metadataProviderStyles.default;
   return isDarkMode ? providerStyle.dark : providerStyle.light;
 };
 
@@ -1806,6 +1588,10 @@ const metadataProviderIcons = {
     src: "/static/img/providers/openlibrary.svg",
     alt: "Open Library",
   },
+  audible: {
+    src: "/static/img/providers/audible.svg",
+    alt: "Audible",
+  },
   musicbrainz: {
     src: "/static/img/providers/musicbrainz.ico",
     alt: "MusicBrainz",
@@ -1816,7 +1602,10 @@ const metadataProviderIcons = {
 };
 
 const renderMetadataProviderIcon = (key, isDarkMode) => {
-  const iconAsset = metadataProviderIcons[key];
+  const normalizedKey = String(key || "").startsWith("discogs_")
+    ? "discogs"
+    : key;
+  const iconAsset = metadataProviderIcons[normalizedKey];
   if (iconAsset) {
     const iconSrc =
       !isDarkMode && iconAsset.lightSrc ? iconAsset.lightSrc : iconAsset.src;
@@ -1825,7 +1614,7 @@ const renderMetadataProviderIcon = (key, isDarkMode) => {
         src={iconSrc}
         alt={iconAsset.alt}
         className={`block h-3.5 w-auto max-w-[3.75rem] object-contain ${
-          key === "discogs" && !isDarkMode ? "invert" : ""
+          normalizedKey === "discogs" && !isDarkMode ? "invert" : ""
         }`}
       />
     );
@@ -1833,51 +1622,9 @@ const renderMetadataProviderIcon = (key, isDarkMode) => {
 
   switch (key) {
     case "google_books":
-      return (
-        <svg
-          className="w-4 h-4"
-          viewBox="0 0 24 24"
-          fill="none"
-          stroke="currentColor"
-          aria-hidden="true"
-        >
-          <path
-            strokeLinecap="round"
-            strokeLinejoin="round"
-            strokeWidth={1.8}
-            d="M5 6.25A2.25 2.25 0 017.25 4h10.5A1.25 1.25 0 0119 5.25v13.5A1.25 1.25 0 0117.75 20H7.25A2.25 2.25 0 015 17.75V6.25z"
-          />
-          <path
-            strokeLinecap="round"
-            strokeLinejoin="round"
-            strokeWidth={1.8}
-            d="M7.5 6H18M8 9.5h6.5M8 13h7.5"
-          />
-        </svg>
-      );
+      return <LucideIcon name="book-open" className="w-4 h-4" />;
     case "openlibrary":
-      return (
-        <svg
-          className="w-4 h-4"
-          viewBox="0 0 24 24"
-          fill="none"
-          stroke="currentColor"
-          aria-hidden="true"
-        >
-          <path
-            strokeLinecap="round"
-            strokeLinejoin="round"
-            strokeWidth={1.8}
-            d="M4.5 6.5A2.5 2.5 0 017 4h11.5v15.5H7a2.5 2.5 0 010-5h11.5"
-          />
-          <path
-            strokeLinecap="round"
-            strokeLinejoin="round"
-            strokeWidth={1.8}
-            d="M8.5 8.5h6M8.5 12h6"
-          />
-        </svg>
-      );
+      return <LucideIcon name="book-open" className="w-4 h-4" />;
     default:
       return (
         <span className="text-[11px] font-black tracking-wide">
@@ -1956,6 +1703,8 @@ function AudionutsUAGUI() {
   const [trackers, setTrackers] = useState([]);
   const [defaultTrackers, setDefaultTrackers] = useState(new Set());
   const [selectedTrackers, setSelectedTrackers] = useState(new Set());
+  const [trackerAliases, setTrackerAliases] = useState({});
+  const [trackerAliasError, setTrackerAliasError] = useState("");
   const [trackerStatuses, setTrackerStatuses] = useState({});
   const [isCheckingTrackerStatuses, setIsCheckingTrackerStatuses] =
     useState(false);
@@ -1968,7 +1717,7 @@ function AudionutsUAGUI() {
   const [isExecuting, setIsExecuting] = useState(false);
   const [isOutputExpanded, setIsOutputExpanded] = useState(false);
   const [expandedFolders, setExpandedFolders] = useState(
-    new Set(["/data", "/torrent_storage_dir"]),
+    getStoredExpandedFolders,
   );
   const [sessionId, setSessionId] = useState("");
   const [sidebarWidth, setSidebarWidth] = useState(() =>
@@ -2008,6 +1757,12 @@ function AudionutsUAGUI() {
     () => new Set(getStoredCollapsedSections()),
   );
   const [executionPreview, setExecutionPreview] = useState(null);
+  const [showAudioTracks, setShowAudioTracks] = useState(
+    () => storage.get(SHOW_AUDIO_TRACKS_KEY) === "true",
+  );
+  const [showSubtitleTracks, setShowSubtitleTracks] = useState(
+    () => storage.get(SHOW_SUBTITLE_TRACKS_KEY) === "true",
+  );
   const [executionScreenshots, setExecutionScreenshots] = useState([]);
   const [executionDescription, setExecutionDescription] = useState(null);
   const [descriptionDraft, setDescriptionDraft] = useState("");
@@ -2113,6 +1868,17 @@ function AudionutsUAGUI() {
     setIsUpdateStatusOpen(false);
     setIsChangelogOpen(true);
   };
+
+  useEffect(() => {
+    storage.set(SHOW_AUDIO_TRACKS_KEY, showAudioTracks ? "true" : "false");
+  }, [showAudioTracks]);
+
+  useEffect(() => {
+    storage.set(
+      SHOW_SUBTITLE_TRACKS_KEY,
+      showSubtitleTracks ? "true" : "false",
+    );
+  }, [showSubtitleTracks]);
 
   useEffect(() => {
     storage.set(
@@ -2399,6 +2165,32 @@ function AudionutsUAGUI() {
     useState(false);
   const fileBrowserSearchTimer = useRef(null);
   const fileBrowserSearchQuery = useRef("");
+  const fileBrowserSearchId = useRef(0);
+
+  // Preserve the desktop file browser scroll position while the
+  // browser is temporarily unmounted or rerendered.
+  const [fileBrowserRestoring, setFileBrowserRestoring] = useState(true);
+  const [fileBrowserScrollTop] = useState(() => {
+    const saved = Number(storage.get(FILE_BROWSER_SCROLL_KEY));
+    return Number.isFinite(saved) && saved >= 0 ? saved : 0;
+  });
+  const fileBrowserScrollTopRef = useRef(fileBrowserScrollTop);
+  const fileBrowserRef = useRef(null);
+  const expandedFoldersRef = useRef(expandedFolders);
+
+  useEffect(() => {
+    expandedFoldersRef.current = expandedFolders;
+    storage.set(
+      FILE_BROWSER_EXPANDED_KEY,
+      JSON.stringify([...expandedFolders]),
+    );
+  }, [expandedFolders]);
+
+  useLayoutEffect(() => {
+    if (fileBrowserRef.current && !fileBrowserRestoring) {
+      fileBrowserRef.current.scrollTop = fileBrowserScrollTopRef.current;
+    }
+  });
 
   // Folder loading states
   const [loadingFolders, setLoadingFolders] = useState(new Set());
@@ -2759,7 +2551,11 @@ function AudionutsUAGUI() {
     }
   };
 
-  const parseTrackersFromArgs = (argsString, defaultTrackersSet) => {
+  const parseTrackersFromArgs = (
+    argsString,
+    defaultTrackersSet,
+    aliases = trackerAliases,
+  ) => {
     const hasTk = /(?:^|\s)(-tk|--trackers)(?=$|=|\s)/i.test(argsString);
     if (!hasTk) {
       return new Set(defaultTrackersSet);
@@ -2774,6 +2570,7 @@ function AudionutsUAGUI() {
       const list = val
         .split(",")
         .map((t) => t.trim().toUpperCase())
+        .map((name) => (Object.hasOwn(aliases, name) ? aliases[name] : name))
         .filter(Boolean);
       return new Set(list);
     }
@@ -3007,6 +2804,16 @@ function AudionutsUAGUI() {
             </div>
           </div>
         </div>
+        {trackerAliasError && (
+          <div
+            className="ua-tracker-status-advisory rounded-md border px-3 py-2 text-xs"
+            data-tone="danger"
+            role="alert"
+          >
+            {trackerAliasError}. Update CLI Alias in tracker configuration
+            before using -tk or --trackers.
+          </div>
+        )}
         {trackerStatusError && (
           <div
             className="ua-tracker-status-advisory rounded-md border px-3 py-2 text-xs"
@@ -3194,7 +3001,7 @@ function AudionutsUAGUI() {
     if (isDifferent) {
       setSelectedTrackers(newSet);
     }
-  }, [customArgs, defaultTrackers]);
+  }, [customArgs, defaultTrackers, trackerAliases]);
 
   // Get current values from args
   const descFilePath = extractArgValue(customArgs, "--descfile");
@@ -3486,9 +3293,7 @@ function AudionutsUAGUI() {
   const appendHtmlFragment = (rawHtml) => {
     const container = richOutputRef.current;
     if (container) {
-      const clean = sanitizeHtml((rawHtml || "").trim());
-      const wrapper = document.createElement("div");
-      wrapper.innerHTML = clean;
+      const wrapper = createUploadOutputFragment((rawHtml || "").trim());
       container.appendChild(wrapper);
       // Use scrollIntoView to avoid clipping of the last line
       setTimeout(() => {
@@ -3556,10 +3361,18 @@ function AudionutsUAGUI() {
 
       if (data.success && data.items) {
         setDirectories(data.items);
-        setExpandedFolders(new Set());
+        // Parents must be populated before their saved descendants can be found.
+        for (const path of getFileBrowserRestorePaths(
+          expandedFoldersRef.current,
+          data.items,
+        )) {
+          await loadFolderContents(path);
+        }
       }
     } catch (error) {
       console.error("Failed to load browse roots:", error);
+    } finally {
+      setFileBrowserRestoring(false);
     }
   };
 
@@ -3691,8 +3504,14 @@ function AudionutsUAGUI() {
           setTrackers(data.trackers);
           const defaultSet = new Set(data.default_trackers || []);
           setDefaultTrackers(defaultSet);
-
-          const initialSet = parseTrackersFromArgs(customArgs, defaultSet);
+          const aliases = data.tracker_aliases || {};
+          setTrackerAliases(aliases);
+          setTrackerAliasError(data.alias_error || "");
+          const initialSet = parseTrackersFromArgs(
+            customArgs,
+            defaultSet,
+            aliases,
+          );
           setSelectedTrackers(initialSet);
 
           if (window.loadUATrackerStatuses) {
@@ -4092,7 +3911,7 @@ function AudionutsUAGUI() {
                       title="Remove from queue"
                       disabled={isExecuting}
                     >
-                      ✕
+                      <LucideIcon name="x" className="h-3 w-3" />
                     </button>
                   </div>
                   <div className="flex flex-col gap-1">
@@ -4211,18 +4030,22 @@ function AudionutsUAGUI() {
     }
   };
 
-  const loadFolderContents = async (path) => {
+  const loadFolderContents = async (path, signal) => {
+    if (signal?.aborted) return;
     try {
       const response = await apiFetch(
         `${API_BASE}/browse?path=${encodeURIComponent(path)}`,
+        { signal },
       );
+      if (signal?.aborted) return;
       const data = await response.json();
+      if (signal?.aborted) return;
 
       if (data.success && data.items) {
         updateDirectoryTree(path, data.items);
       }
     } catch (error) {
-      console.error("Failed to load folder:", error);
+      if (!signal?.aborted) console.error("Failed to load folder:", error);
     }
   };
 
@@ -4230,7 +4053,20 @@ function AudionutsUAGUI() {
     const updateTree = (nodes) => {
       return nodes.map((node) => {
         if (node.path === path) {
-          return { ...node, children: items };
+          // Keep loaded descendants while refreshing a parent to avoid
+          // collapsing the visible tree (and clamping its scroll position).
+          const previousChildren = new Map(
+            (node.children || []).map((child) => [child.path, child]),
+          );
+          return {
+            ...node,
+            children: items.map((item) => {
+              const previous = previousChildren.get(item.path);
+              return item.type === "folder" && previous?.type === "folder"
+                ? { ...item, children: previous.children || item.children }
+                : item;
+            }),
+          };
         } else if (node.children) {
           return { ...node, children: updateTree(node.children) };
         }
@@ -4242,7 +4078,9 @@ function AudionutsUAGUI() {
   };
 
   // File Browser search
-  const handleFileBrowserSearch = (value) => {
+  const handleFileBrowserSearch = (value, signal) => {
+    if (signal?.aborted) return;
+    const searchId = ++fileBrowserSearchId.current;
     setFileBrowserSearch(value);
     const searchQuery = value.trim();
     fileBrowserSearchQuery.current = searchQuery;
@@ -4255,17 +4093,28 @@ function AudionutsUAGUI() {
       return;
     }
     setFileBrowserSearchLoading(true);
+    const onAbort = () => {
+      if (fileBrowserSearchId.current === searchId) {
+        clearTimeout(fileBrowserSearchTimer.current);
+        setFileBrowserSearchLoading(false);
+      }
+    };
+    signal?.addEventListener("abort", onAbort, { once: true });
     fileBrowserSearchTimer.current = setTimeout(async () => {
+      if (signal?.aborted) return;
       try {
         const response = await apiFetch(
           `${API_BASE}/browse_search?q=${encodeURIComponent(searchQuery)}`,
+          { signal },
         );
+        if (signal?.aborted) return;
         if (!response.ok) {
           throw new Error(`Search request failed (${response.status})`);
         }
         const data = await response.json();
+        if (signal?.aborted) return;
         // Early return if the search has changed since this request
-        if (fileBrowserSearchQuery.current !== searchQuery) return;
+        if (fileBrowserSearchId.current !== searchId) return;
         if (data.success) {
           setFileBrowserSearchResults(data);
         } else {
@@ -4276,8 +4125,9 @@ function AudionutsUAGUI() {
           });
         }
       } catch (error) {
+        if (signal?.aborted) return;
         console.error("File browser search failed:", error);
-        if (fileBrowserSearchQuery.current === searchQuery) {
+        if (fileBrowserSearchId.current === searchId) {
           setFileBrowserSearchResults({
             items: [],
             query: searchQuery,
@@ -4285,11 +4135,28 @@ function AudionutsUAGUI() {
           });
         }
       } finally {
-        if (fileBrowserSearchQuery.current === searchQuery) {
+        signal?.removeEventListener("abort", onAbort);
+        if (!signal?.aborted && fileBrowserSearchId.current === searchId) {
           setFileBrowserSearchLoading(false);
         }
       }
     }, 300); //300ms debounce so we dont spam requests for every keystroke
+  };
+
+  const refreshFileBrowserAfterUpload = async (signal) => {
+    // Give the completed process's filesystem changes time to settle.
+    await new Promise((resolve) => setTimeout(resolve, 500));
+    if (signal?.aborted) return;
+    if (fileBrowserSearchQuery.current) {
+      handleFileBrowserSearch(fileBrowserSearchQuery.current, signal);
+    }
+    for (const path of sortFolderPathsByDepth(expandedFoldersRef.current)) {
+      if (signal?.aborted) return;
+      if (expandedFoldersRef.current.has(path)) {
+        await loadFolderContents(path, signal);
+        if (signal?.aborted) return;
+      }
+    }
   };
 
   const renderSearchResults = (results) => {
@@ -4570,18 +4437,7 @@ function AudionutsUAGUI() {
                     setRootFolderDropTarget(null);
                   }}
                 >
-                  <svg
-                    viewBox="0 0 16 16"
-                    aria-hidden="true"
-                    className="h-4 w-4"
-                  >
-                    <circle cx="5" cy="3.5" r="1" fill="currentColor" />
-                    <circle cx="11" cy="3.5" r="1" fill="currentColor" />
-                    <circle cx="5" cy="8" r="1" fill="currentColor" />
-                    <circle cx="11" cy="8" r="1" fill="currentColor" />
-                    <circle cx="5" cy="12.5" r="1" fill="currentColor" />
-                    <circle cx="11" cy="12.5" r="1" fill="currentColor" />
-                  </svg>
+                  <LucideIcon name="grip-vertical" className="h-4 w-4" />
                 </span>
                 <button
                   type="button"
@@ -4711,7 +4567,7 @@ function AudionutsUAGUI() {
     if (hasDescFile) {
       if (!descFilePath) {
         appendSystemMessage(
-          "✗ Please select or enter a description file path when using --descfile",
+          "Error: Please select or enter a description file path when using --descfile",
           "error",
         );
         return false;
@@ -4719,7 +4575,7 @@ function AudionutsUAGUI() {
       const pathValidation = isValidDescFilePath(descFilePath);
       if (!pathValidation.valid) {
         appendSystemMessage(
-          `✗ Invalid description file: ${pathValidation.error}`,
+          `Error: Invalid description file: ${pathValidation.error}`,
           "error",
         );
         return false;
@@ -4730,14 +4586,14 @@ function AudionutsUAGUI() {
     if (hasDescLink) {
       if (!descLinkUrl) {
         appendSystemMessage(
-          "✗ Please enter a description URL when using --desclink",
+          "Error: Please enter a description URL when using --desclink",
           "error",
         );
         return false;
       }
       if (!isValidUrl(descLinkUrl)) {
         appendSystemMessage(
-          "✗ Please enter a valid paste URL for --desclink (pastebin, hastebin, etc.)",
+          "Error: Please enter a valid paste URL for --desclink (pastebin, hastebin, etc.)",
           "error",
         );
         return false;
@@ -4750,7 +4606,7 @@ function AudionutsUAGUI() {
 
     appendSystemMessage("");
     appendSystemMessage(`$ python upload.py "${path}" ${customArgs}`);
-    appendSystemMessage("→ Starting execution...");
+    appendSystemMessage("Starting execution...");
 
     let localController = null;
 
@@ -4773,13 +4629,16 @@ function AudionutsUAGUI() {
       if (!response.ok) {
         const errText = await response.text();
         appendSystemMessage(
-          `✗ Execute failed (${response.status}): ${errText || "Request failed"}`,
+          `Error: Execute failed (${response.status}): ${errText || "Request failed"}`,
           "error",
         );
         return false;
       }
       if (!response.body) {
-        appendSystemMessage("✗ Execute failed: empty response body", "error");
+        appendSystemMessage(
+          "Error: Execute failed: empty response body",
+          "error",
+        );
         return false;
       }
       const reader = response.body.getReader();
@@ -4802,8 +4661,7 @@ function AudionutsUAGUI() {
                 const key = `${clean.length}:${shortSample}`;
                 if (lastFullHashRef.current !== key) {
                   lastFullHashRef.current = key;
-                  const wrapper = document.createElement("div");
-                  wrapper.innerHTML = clean;
+                  const wrapper = createUploadOutputFragment(clean);
                   if (rootContainer) rootContainer.appendChild(wrapper);
                   setTimeout(() => {
                     const last =
@@ -4827,7 +4685,9 @@ function AudionutsUAGUI() {
           } else if (data.type === "exit") {
             if (!(localController && localController.signal.aborted)) {
               appendSystemMessage("");
-              appendSystemMessage(`✓ Process exited with code ${data.code}`);
+              appendSystemMessage(
+                `Success: Process exited with code ${data.code}`,
+              );
               exitCode = data.code;
             }
           }
@@ -4860,14 +4720,20 @@ function AudionutsUAGUI() {
       /* eslint-enable no-constant-condition */
 
       if (!(localController && localController.signal.aborted)) {
-        appendSystemMessage("✓ Execution completed");
+        appendSystemMessage("Success: Execution completed");
         appendSystemMessage("");
+        if (exitCode === 0) {
+          await refreshFileBrowserAfterUpload(localController.signal);
+        }
         return exitCode === 0 || exitCode === null;
       }
       return false;
     } catch (error) {
       if (!(localController && localController.signal.aborted)) {
-        appendSystemMessage("✗ Execution error: " + error.message, "error");
+        appendSystemMessage(
+          "Error: Execution failed: " + error.message,
+          "error",
+        );
       }
       return false;
     } finally {
@@ -4902,7 +4768,7 @@ function AudionutsUAGUI() {
         if (!response.ok) {
           const errText = await response.text();
           appendSystemMessage(
-            `✗ Failed to generate queue file: ${errText}`,
+            `Error: Failed to generate queue file: ${errText}`,
             "error",
           );
           setIsExecuting(false);
@@ -4912,7 +4778,7 @@ function AudionutsUAGUI() {
         const data = await response.json();
         if (!data.success || !data.path) {
           appendSystemMessage(
-            `✗ Failed to generate queue file: ${data.error || "Unknown error"}`,
+            `Error: Failed to generate queue file: ${data.error || "Unknown error"}`,
             "error",
           );
           setIsExecuting(false);
@@ -4923,7 +4789,7 @@ function AudionutsUAGUI() {
         await executeSinglePath(data.path, newSessionId);
       } catch (error) {
         appendSystemMessage(
-          `✗ Error generating queue: ${error.message}`,
+          `Error generating queue: ${error.message}`,
           "error",
         );
       } finally {
@@ -4936,7 +4802,10 @@ function AudionutsUAGUI() {
     const path =
       selectedPaths.length === 1 ? selectedPaths[0].path : selectedPath;
     if (!path) {
-      appendSystemMessage("✗ Please select a file or folder first", "error");
+      appendSystemMessage(
+        "Error: Please select a file or folder first",
+        "error",
+      );
       return;
     }
 
@@ -4971,7 +4840,7 @@ function AudionutsUAGUI() {
           body: JSON.stringify({ session_id: sessionId }),
         });
 
-        appendSystemMessage("✗ Process terminated by user", "error");
+        appendSystemMessage("Error: Process terminated by user", "error");
 
         setIsExecuting(false);
         setSessionId("");
@@ -5751,19 +5620,22 @@ function AudionutsUAGUI() {
 
   const renderExecutionPreviewPanel = (compact = false) => {
     const media = executionPreview;
-    const category = media?.category || "";
-    const previewTitle =
+    const category = String(media?.category || "").toUpperCase();
+    const showTrackDetails = category === "MOVIE" || category === "TV";
+    const baseTitle =
       media?.title ||
       media?.name ||
       media?.filename ||
       "Detecting media metadata...";
-    const subtitleParts = [media?.original_title, media?.year].filter(Boolean);
-    const infoBadges = [
-      media?.category,
-      media?.media_type,
-      media?.source,
-      media?.resolution,
-    ].filter(Boolean);
+    const previewTitle = media?.year
+      ? `${baseTitle} (${media.year})`
+      : baseTitle;
+    const originalTitle = String(media?.original_title || "").trim();
+    const showOriginalTitle =
+      originalTitle &&
+      originalTitle.localeCompare(baseTitle, undefined, {
+        sensitivity: "accent",
+      }) !== 0;
     const metadataSources = Array.isArray(media?.metadata_sources)
       ? media.metadata_sources.filter((source) => source && source.value)
       : [];
@@ -5787,228 +5659,102 @@ function AudionutsUAGUI() {
     const genres = Array.isArray(media?.genres)
       ? media.genres.filter(Boolean).slice(0, 4)
       : [];
-    const networks = Array.isArray(media?.networks)
-      ? media.networks.filter(Boolean).slice(0, 3)
-      : [];
     const panelPadding = compact ? "p-3" : "p-4";
     const titleSize = compact ? "text-base" : "text-lg";
     const posterHeight = compact ? "h-64" : "h-80";
-    const episodeLabel =
-      media?.episode_title ||
-      media?.episode_name ||
-      [media?.season, media?.episode].filter(Boolean).join(" ");
     const overviewText =
       category === "TV"
         ? media?.episode_overview || media?.overview
         : media?.overview;
     const music = media?.music || {};
+    const detailSections = Array.isArray(media?.detail_sections)
+      ? media.detail_sections.filter(
+          (section) =>
+            section && Array.isArray(section.items) && section.items.length > 0,
+        )
+      : [];
 
-    const detailRows = (rows) => rows.filter((row) => row.value);
-    const renderDetailGrid = (title, rows) => {
-      const visibleRows = detailRows(rows);
-      if (visibleRows.length === 0) return null;
+    const audioTracks = Array.isArray(media?.audio_tracks)
+      ? media.audio_tracks
+      : [];
+    const subtitleTracks = Array.isArray(media?.subtitle_tracks)
+      ? media.subtitle_tracks
+      : [];
+
+    const renderMediaTrack = (track, kind) => {
+      const badges = [];
+
+      if (track.format) badges.push(track.format);
+      if (kind === "audio" && track.channels) badges.push(track.channels);
+      if (kind === "audio" && track.bitrate) badges.push(track.bitrate);
+      if (track.default) badges.push("Default");
+      if (track.forced) badges.push("Forced");
+      if (track.hearing_impaired) badges.push("SDH/HI");
+      if (track.commentary) badges.push("Commentary");
 
       return (
         <div
-          className={`rounded-xl p-3 ${isDarkMode ? "bg-gray-800 border border-gray-700" : "bg-gray-50 border border-gray-200"}`}
+          key={`${kind}-${track.index}`}
+          className="ua-processing-track rounded-lg border px-3 py-2"
         >
-          <p
-            className={`text-xs font-semibold uppercase tracking-wide mb-2 ${isDarkMode ? "text-gray-400" : "text-gray-500"}`}
-          >
-            {title}
-          </p>
-          <div className="grid grid-cols-1 gap-2">
-            {visibleRows.map((row) => (
-              <div
-                key={row.label}
-                className="flex items-start justify-between gap-3"
-              >
-                <span
-                  className={`text-xs font-semibold ${isDarkMode ? "text-gray-400" : "text-gray-500"}`}
-                >
-                  {row.label}
+          <div className="flex items-start gap-2">
+            <span className="ua-processing-muted shrink-0 font-mono text-xs">
+              {track.index}.
+            </span>
+            <div className="min-w-0 flex-1">
+              <div className="flex flex-wrap items-center gap-2">
+                <span className="text-sm font-semibold">
+                  {track.language || "Unknown language"}
                 </span>
-                <span
-                  className={`text-xs text-right ${isDarkMode ? "text-gray-200" : "text-gray-800"}`}
-                >
-                  {row.value}
-                </span>
+                {badges.map((badge, index) => (
+                  <span
+                    key={`${badge}-${index}`}
+                    className="ua-accent-chip rounded border px-1.5 py-0.5 text-[10px]"
+                  >
+                    {badge}
+                  </span>
+                ))}
               </div>
-            ))}
+              {track.title && (
+                <p className="ua-processing-muted mt-1 break-words text-xs">
+                  {track.title}
+                </p>
+              )}
+            </div>
           </div>
         </div>
       );
     };
 
-    const tvRows = detailRows([
-      { label: "Episode", value: episodeLabel },
-      {
-        label: "Format",
-        value:
-          typeof media?.tv_pack === "boolean"
-            ? media.tv_pack
-              ? "Season Pack"
-              : "Single Episode"
-            : "",
-      },
-      { label: "Service", value: media?.service },
-      { label: "Network", value: networks.join(", ") },
-      { label: "Audio", value: media?.audio },
-    ]);
-    const movieRows = detailRows([
-      { label: "Audio", value: media?.audio },
-      { label: "Service", value: media?.service },
-      { label: "Network", value: networks.join(", ") },
-    ]);
-    const bookRows = detailRows([
-      { label: "Author", value: media?.author },
-      { label: "Narrator", value: media?.narrator },
-      { label: "Language", value: media?.book_language },
-      { label: "Publisher", value: media?.publisher },
-      { label: "Duration", value: media?.audiobook_duration },
-      { label: "Bitrate", value: media?.audiobook_bitrate },
-      {
-        label: "Series",
-        value: media?.book_series
-          ? [
-              media.book_series,
-              media?.book_series_index ? `#${media.book_series_index}` : "",
-            ]
-              .filter(Boolean)
-              .join(" ")
-          : "",
-      },
-      {
-        label: "Format",
-        value:
-          typeof media?.audiobook === "boolean"
-            ? media.audiobook
-              ? "Audiobook"
-              : "Book"
-            : "",
-      },
-    ]);
-    const gameRows = detailRows([
-      { label: "Platform", value: media?.platform },
-      { label: "Version", value: media?.game_version },
-      { label: "Release Type", value: media?.game_subcategory },
-      { label: "Developer", value: media?.developer },
-      { label: "Publisher", value: media?.publisher },
-      { label: "Region", value: media?.game_region },
-      { label: "System", value: media?.game_system },
-    ]);
-    const musicRows = detailRows([
-      {
-        label: "Artist",
-        value: music?.artist
-          ? `${music.artist}${music.artist_source ? ` (${music.artist_source})` : ""}`
-          : "",
-      },
-      {
-        label: "Album",
-        value: music?.album
-          ? `${music.album}${music.album_source ? ` (${music.album_source})` : ""}`
-          : "",
-      },
-      {
-        label: "Original Year",
-        value: music?.original_year
-          ? `${music.original_year}${music.year_source ? ` (${music.year_source})` : ""}`
-          : "",
-      },
-      {
-        label: "Release Type",
-        value: music?.release_type
-          ? `${music.release_type}${music.release_type_source ? ` (${music.release_type_source})` : ""}`
-          : "",
-      },
-      {
-        label: "Media",
-        value: music?.media
-          ? `${music.media}${music.media_source ? ` (${music.media_source})` : ""}`
-          : "",
-      },
-      { label: "Audio", value: music?.technical || media?.audio },
-      {
-        label: "Tracks / Discs",
-        value:
-          music?.track_count || music?.disc_count
-            ? `${music.track_count || "?"} / ${music.disc_count || "1"}`
-            : "",
-      },
-      {
-        label: "This Release",
-        value: [
-          music?.release_year,
-          music?.retail_date,
-          music?.release_label,
-          music?.release_catalogue_number,
-        ]
-          .filter(Boolean)
-          .join(" • "),
-      },
-      {
-        label: "Edition",
-        value: [music?.edition, music?.edition_year]
-          .filter(Boolean)
-          .join(" • "),
-      },
-    ]);
-    const musicCheckRows = detailRows([
-      {
-        label: "Auxiliary Files",
-        value: Array.isArray(music?.auxiliary)
-          ? music.auxiliary.join(", ")
-          : "",
-      },
-      {
-        label: "Metadata Conflicts",
-        value: Array.isArray(music?.conflicts)
-          ? music.conflicts.join(", ")
-          : "",
-      },
-    ]);
-    let categorySection = null;
-    if (category === "TV")
-      categorySection = renderDetailGrid("TV Details", tvRows);
-    else if (category === "BOOK")
-      categorySection = renderDetailGrid("Book Details", bookRows);
-    else if (category === "GAME")
-      categorySection = renderDetailGrid("Game Details", gameRows);
-    else if (category === "MUSIC")
-      categorySection = renderDetailGrid("Music Details", musicRows);
-    else categorySection = renderDetailGrid("Movie Details", movieRows);
+    const renderPreviewSection = (section) => (
+      <section key={section.key} className="ua-processing-section">
+        <h4 className="ua-processing-section-title">{section.label}</h4>
+        <dl className="ua-processing-detail-list">
+          {section.items.map((item) => (
+            <div key={item.key} className="ua-processing-detail-row">
+              <dt>{item.label}</dt>
+              <dd>{item.value}</dd>
+            </div>
+          ))}
+        </dl>
+      </section>
+    );
+
+    const renderedDetailSections = detailSections.map(renderPreviewSection);
 
     return (
-      <div className="flex flex-col h-full">
-        <div
-          className={`ua-upload-panel-header ${panelPadding} border-b flex-shrink-0`}
-        >
-          <h2
-            className={`${titleSize} font-bold ${isDarkMode ? "text-white" : "text-gray-800"} flex items-center gap-2`}
-          >
-            Now Processing
-          </h2>
-          <p
-            className={`text-xs mt-1 ${isDarkMode ? "text-gray-400" : "text-gray-600"}`}
-          >
-            The sidebar is showing live media metadata while the upload runs.
-          </p>
-        </div>
-
-        <div className={`flex-1 overflow-y-auto ${panelPadding} space-y-4`}>
-          <div
-            className={`rounded-2xl overflow-hidden border ${isDarkMode ? "border-gray-700 bg-gray-900" : "border-gray-200 bg-white"} shadow-sm`}
-          >
+      <div className="ua-processing-preview flex h-full flex-col">
+        <div className="flex-1 overflow-y-auto">
+          <div className="ua-processing-card min-h-full overflow-hidden">
             {media?.poster_url ? (
               <div
-                className={`w-full ${posterHeight} flex items-center justify-center gap-3 p-3 ${isDarkMode ? "bg-gray-950" : "bg-stone-100"}`}
+                className={`ua-processing-artwork relative flex w-full items-center justify-center ${posterHeight}`}
               >
-                <div className="min-w-0 h-full flex-1 flex items-center justify-center">
+                <div className="flex h-full min-w-0 flex-1 items-center justify-center p-3">
                   <img
                     src={media.poster_url}
                     alt={previewTitle}
-                    className="max-w-full max-h-full object-contain"
+                    className="ua-processing-poster max-h-full max-w-full object-contain"
                   />
                 </div>
                 {category === "XXX" &&
@@ -6024,7 +5770,7 @@ function AudionutsUAGUI() {
                           ? "Generating a new XXX cover"
                           : "Generate a new XXX cover"
                       }
-                      className="ua-accent-action flex-shrink-0 inline-flex items-center gap-1.5 rounded-lg px-2.5 py-2 text-xs font-semibold disabled:cursor-wait disabled:opacity-60"
+                      className="ua-processing-cover-action ua-accent-action absolute right-3 top-3 inline-flex flex-shrink-0 items-center gap-1.5 rounded-full p-2.5 text-xs font-semibold disabled:cursor-wait disabled:opacity-60"
                       title="Generate another cover from a different video frame"
                     >
                       <span aria-hidden="true">
@@ -6039,88 +5785,90 @@ function AudionutsUAGUI() {
               </div>
             ) : (
               <div
-                className={`w-full ${posterHeight} flex flex-col items-center justify-center gap-2 ${isDarkMode ? "bg-gray-800 text-gray-400" : "bg-gray-100 text-gray-500"}`}
+                className={`ua-processing-artwork relative flex w-full ${posterHeight} flex-col items-center justify-center gap-3`}
               >
-                <span className="text-sm">Poster not available yet</span>
+                <span
+                  className="ua-processing-placeholder-icon"
+                  aria-hidden="true"
+                >
+                  {mediaIconForCategory(category)}
+                </span>
+                <span className="ua-processing-muted text-sm">
+                  {media?.status === "waiting"
+                    ? "Reading media metadata…"
+                    : "Artwork not available"}
+                </span>
               </div>
             )}
 
-            <div className={`${panelPadding} space-y-3`}>
+            <div className={`${panelPadding} space-y-4`}>
               <div>
+                <div className="ua-processing-eyebrow mb-2 flex items-center gap-2 text-xs font-bold uppercase tracking-[0.12em]">
+                  {mediaIconForCategory(category)}
+                  <span>{category || "Media"}</span>
+                </div>
                 <h3
-                  className={`${titleSize} font-bold leading-tight ${isDarkMode ? "text-white" : "text-gray-900"}`}
+                  className={`ua-processing-title ${titleSize} font-bold leading-tight`}
                 >
                   {previewTitle}
                 </h3>
-                {subtitleParts.length > 0 && (
-                  <p
-                    className={`text-sm mt-1 ${isDarkMode ? "text-gray-400" : "text-gray-600"}`}
-                  >
-                    {subtitleParts.join(" • ")}
+                {showOriginalTitle && (
+                  <p className="ua-processing-muted mt-1 text-sm">
+                    Original title: {originalTitle}
                   </p>
                 )}
               </div>
 
-              {infoBadges.length > 0 && (
-                <div className="flex flex-wrap gap-2">
-                  {infoBadges.map((badge) => (
-                    <span
-                      key={badge}
-                      className={`px-2.5 py-1 rounded-full text-xs font-semibold ${isDarkMode ? "bg-gray-800 text-gray-200 border border-gray-700" : "bg-orange-50 text-orange-700 border border-orange-200"}`}
-                    >
-                      {badge}
-                    </span>
-                  ))}
-                </div>
-              )}
-
               {previewProviders.length > 0 && (
-                <div className="flex flex-wrap gap-2">
-                  {previewProviders.map((source) => {
-                    const providerClass = getMetadataProviderStyle(
-                      source.key,
-                      isDarkMode,
-                    );
-                    const content = (
-                      <>
-                        <span className="inline-flex items-center justify-center min-w-[2.6rem] px-2 h-6 rounded-full">
-                          {renderMetadataProviderIcon(source.key, isDarkMode)}
-                        </span>
-                        <span className="min-w-0">
-                          <span className="block text-[11px] font-semibold font-mono truncate">
-                            {source.value}
+                <section className="ua-processing-provider-section">
+                  <h4 className="sr-only">Metadata providers</h4>
+                  <div className="flex flex-wrap gap-2">
+                    {previewProviders.map((source) => {
+                      const providerClass = getMetadataProviderStyle(
+                        source.key,
+                        isDarkMode,
+                      );
+                      const content = (
+                        <>
+                          <span className="inline-flex items-center justify-center min-w-[2.6rem] px-2 h-6 rounded-full">
+                            {renderMetadataProviderIcon(source.key, isDarkMode)}
                           </span>
-                        </span>
-                      </>
-                    );
-                    const sharedClassName = `inline-flex items-center gap-1.5 max-w-full rounded-full border px-2.5 py-1 transition-colors ${providerClass}`;
+                          <span className="min-w-0">
+                            <span className="block text-[11px] font-semibold font-mono truncate">
+                              {source.value}
+                            </span>
+                          </span>
+                        </>
+                      );
+                      const sharedClassName = `inline-flex items-center gap-1.5 max-w-full rounded-full border px-2.5 py-1 transition-colors ${providerClass}`;
 
-                    if (source.url) {
+                      if (source.url) {
+                        return (
+                          <a
+                            key={`${source.key}-${source.value}`}
+                            href={source.url}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className={`${sharedClassName} hover:brightness-105`}
+                            title={`${source.label || source.key}: ${source.value}`}
+                          >
+                            {content}
+                          </a>
+                        );
+                      }
+
                       return (
-                        <a
+                        <div
                           key={`${source.key}-${source.value}`}
-                          href={source.url}
-                          target="_blank"
-                          rel="noreferrer"
-                          className={`${sharedClassName} hover:brightness-105`}
+                          className={sharedClassName}
                           title={`${source.label || source.key}: ${source.value}`}
                         >
                           {content}
-                        </a>
+                        </div>
                       );
-                    }
-
-                    return (
-                      <div
-                        key={`${source.key}-${source.value}`}
-                        className={sharedClassName}
-                        title={`${source.label || source.key}: ${source.value}`}
-                      >
-                        {content}
-                      </div>
-                    );
-                  })}
-                </div>
+                    })}
+                  </div>
+                </section>
               )}
 
               {genres.length > 0 && (
@@ -6136,17 +5884,131 @@ function AudionutsUAGUI() {
                 </div>
               )}
 
-              {categorySection}
+              {(overviewText || media?.status === "waiting") && (
+                <section className="ua-processing-section">
+                  <h4 className="ua-processing-section-title">
+                    {category === "MUSIC"
+                      ? "Release Notes"
+                      : category === "TV" && media?.episode_overview
+                        ? "Episode Overview"
+                        : "Overview"}
+                  </h4>
+                  <p className="ua-processing-overview text-sm leading-6">
+                    {overviewText ||
+                      "Upload Assistant is analyzing this item. Metadata will appear as soon as the first snapshot is ready."}
+                  </p>
+                </section>
+              )}
 
-              {category === "MUSIC" &&
-                renderDetailGrid("Release Checks", musicCheckRows)}
+              {showTrackDetails && media?.status !== "waiting" && (
+                <section className="ua-processing-section">
+                  <h4 className="ua-processing-section-title">Track Details</h4>
+                  <div className="ua-processing-track-controls space-y-2">
+                    <button
+                      type="button"
+                      onClick={() => setShowAudioTracks((value) => !value)}
+                      aria-pressed={showAudioTracks}
+                      className="ua-processing-track-toggle flex w-full items-center justify-between gap-3 rounded-lg py-2 text-left transition-colors"
+                    >
+                      <span>
+                        <span className="block text-sm font-medium">
+                          Show audio tracks
+                        </span>
+                        <span className="ua-processing-muted block text-xs">
+                          {audioTracks.length} track
+                          {audioTracks.length === 1 ? "" : "s"} detected
+                        </span>
+                      </span>
+                      <span
+                        className={`relative inline-flex h-6 w-11 shrink-0 items-center rounded-full transition-colors ${
+                          showAudioTracks
+                            ? "ua-accent-indicator"
+                            : isDarkMode
+                              ? "bg-gray-700"
+                              : "bg-gray-300"
+                        }`}
+                      >
+                        <span
+                          className={`inline-block h-4 w-4 rounded-full bg-white transition-transform ${
+                            showAudioTracks ? "translate-x-6" : "translate-x-1"
+                          }`}
+                        />
+                      </span>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => setShowSubtitleTracks((value) => !value)}
+                      aria-pressed={showSubtitleTracks}
+                      className="ua-processing-track-toggle flex w-full items-center justify-between gap-3 rounded-lg py-2 text-left transition-colors"
+                    >
+                      <span>
+                        <span className="block text-sm font-medium">
+                          Show subtitle tracks
+                        </span>
+                        <span className="ua-processing-muted block text-xs">
+                          {subtitleTracks.length} track
+                          {subtitleTracks.length === 1 ? "" : "s"} detected
+                        </span>
+                      </span>
+                      <span
+                        className={`relative inline-flex h-6 w-11 shrink-0 items-center rounded-full transition-colors ${
+                          showSubtitleTracks
+                            ? "ua-accent-indicator"
+                            : isDarkMode
+                              ? "bg-gray-700"
+                              : "bg-gray-300"
+                        }`}
+                      >
+                        <span
+                          className={`inline-block h-4 w-4 rounded-full bg-white transition-transform ${
+                            showSubtitleTracks
+                              ? "translate-x-6"
+                              : "translate-x-1"
+                          }`}
+                        />
+                      </span>
+                    </button>
+                  </div>
+                </section>
+              )}
+
+              {showTrackDetails &&
+                showAudioTracks &&
+                audioTracks.length > 0 && (
+                  <section className="ua-processing-section">
+                    <h4 className="ua-processing-section-title">
+                      Audio Tracks ({audioTracks.length})
+                    </h4>
+                    <div className="ua-processing-track-list space-y-2">
+                      {audioTracks.map((track) =>
+                        renderMediaTrack(track, "audio"),
+                      )}
+                    </div>
+                  </section>
+                )}
+
+              {showTrackDetails &&
+                showSubtitleTracks &&
+                subtitleTracks.length > 0 && (
+                  <section className="ua-processing-section">
+                    <h4 className="ua-processing-section-title">
+                      Subtitle Tracks ({subtitleTracks.length})
+                    </h4>
+                    <div className="ua-processing-track-list space-y-2">
+                      {subtitleTracks.map((track) =>
+                        renderMediaTrack(track, "subtitle"),
+                      )}
+                    </div>
+                  </section>
+                )}
+
+              {renderedDetailSections}
 
               {category === "MUSIC" &&
                 Array.isArray(music?.warnings) &&
                 music.warnings.length > 0 && (
-                  <div
-                    className={`rounded-xl p-3 border ${isDarkMode ? "bg-amber-950/30 border-amber-900 text-amber-100" : "bg-amber-50 border-amber-200 text-amber-900"}`}
-                  >
+                  <section className="ua-processing-warning rounded-xl border p-3">
                     <p className="text-xs font-semibold uppercase tracking-wide mb-2">
                       Music Validation
                     </p>
@@ -6155,47 +6017,19 @@ function AudionutsUAGUI() {
                         <li key={`${warning}-${index}`}>• {warning}</li>
                       ))}
                     </ul>
-                  </div>
+                  </section>
                 )}
 
-              <div
-                className={`rounded-xl p-3 ${isDarkMode ? "bg-gray-800 border border-gray-700" : "bg-gray-50 border border-gray-200"}`}
-              >
-                <p
-                  className={`text-xs font-semibold uppercase tracking-wide mb-2 ${isDarkMode ? "text-gray-400" : "text-gray-500"}`}
-                >
-                  {category === "MUSIC"
-                    ? "Release Notes"
-                    : category === "TV" && media?.episode_overview
-                      ? "Episode Overview"
-                      : "Overview"}
-                </p>
-                <p
-                  className={`text-sm leading-6 ${isDarkMode ? "text-gray-200" : "text-gray-700"}`}
-                >
-                  {overviewText ||
-                    (media?.status === "waiting"
-                      ? "Metadata will appear here as soon as Upload-Assistant writes the first meta snapshot."
-                      : category === "MUSIC"
-                        ? "No release notes were supplied. Review the music details and validation above before continuing."
-                        : "No overview available for this item.")}
-                </p>
-              </div>
-
-              <div
-                className={`rounded-xl p-3 ${isDarkMode ? "bg-gray-800 border border-gray-700" : "bg-gray-50 border border-gray-200"}`}
-              >
-                <p
-                  className={`text-xs font-semibold uppercase tracking-wide mb-2 ${isDarkMode ? "text-gray-400" : "text-gray-500"}`}
-                >
-                  Source Path
-                </p>
-                <p
-                  className={`text-xs break-all font-mono ${isDarkMode ? "text-gray-300" : "text-gray-700"}`}
-                >
-                  {media?.path || selectedPath}
-                </p>
-              </div>
+              {(media?.path || selectedPath) && (
+                <footer className="ua-processing-source border-t pt-3">
+                  <p className="ua-processing-section-title mb-1">
+                    Source Path
+                  </p>
+                  <p className="break-all font-mono text-xs">
+                    {media?.path || selectedPath}
+                  </p>
+                </footer>
+              )}
             </div>
           </div>
         </div>
@@ -6268,6 +6102,11 @@ function AudionutsUAGUI() {
               compact
             />
             <div className="ml-2 flex shrink-0 items-center gap-1">
+              <window.UAApiKeyAlerts
+                trackers={trackers}
+                appBase={APP_BASE}
+                placement="header"
+              />
               {renderUpdateButton()}
               {renderHelpButton()}
               {renderThemePalette()}
@@ -6311,19 +6150,10 @@ function AudionutsUAGUI() {
                           : "bg-white border-gray-300 text-gray-700 placeholder-gray-400 focus:border-blue-500"
                       } focus:outline-none`}
                     />
-                    <svg
-                      className={`absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 ${isDarkMode ? "text-gray-500" : "text-gray-400"}`}
-                      fill="none"
-                      stroke="currentColor"
-                      viewBox="0 0 24 24"
-                    >
-                      <path
-                        strokeLinecap="round"
-                        strokeLinejoin="round"
-                        strokeWidth={2}
-                        d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"
-                      />
-                    </svg>
+                    <LucideIcon
+                      name="search"
+                      className={`absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 ${isDarkMode ? "text-gray-500" : "text-gray-400"}`}
+                    />
                     {fileBrowserSearch && (
                       <button
                         type="button"
@@ -6331,19 +6161,7 @@ function AudionutsUAGUI() {
                         onClick={() => handleFileBrowserSearch("")}
                         className={`absolute right-2 top-1/2 -translate-y-1/2 p-0.5 rounded ${isDarkMode ? "hover:bg-gray-700 text-gray-400" : "hover:bg-gray-200 text-gray-500"}`}
                       >
-                        <svg
-                          className="w-3.5 h-3.5"
-                          fill="none"
-                          stroke="currentColor"
-                          viewBox="0 0 24 24"
-                        >
-                          <path
-                            strokeLinecap="round"
-                            strokeLinejoin="round"
-                            strokeWidth={2}
-                            d="M6 18L18 6M6 6l12 12"
-                          />
-                        </svg>
+                        <LucideIcon name="x" className="h-3.5 w-3.5" />
                       </button>
                     )}
                   </div>
@@ -6400,19 +6218,10 @@ function AudionutsUAGUI() {
                             descFilePath &&
                             !descFileError && (
                               <span className="text-green-500 ml-1">
-                                <svg
-                                  className="w-4 h-4 inline"
-                                  fill="none"
-                                  stroke="currentColor"
-                                  viewBox="0 0 24 24"
-                                >
-                                  <path
-                                    strokeLinecap="round"
-                                    strokeLinejoin="round"
-                                    strokeWidth={2}
-                                    d="M5 13l4 4L19 7"
-                                  />
-                                </svg>
+                                <LucideIcon
+                                  name="check"
+                                  className="inline h-4 w-4"
+                                />
                               </span>
                             )}
                         </h2>
@@ -6453,19 +6262,7 @@ function AudionutsUAGUI() {
                             }}
                             className={`p-1 rounded ${isDarkMode ? "hover:bg-gray-700 text-gray-400" : "hover:bg-gray-200 text-gray-500"}`}
                           >
-                            <svg
-                              className="w-4 h-4"
-                              fill="none"
-                              stroke="currentColor"
-                              viewBox="0 0 24 24"
-                            >
-                              <path
-                                strokeLinecap="round"
-                                strokeLinejoin="round"
-                                strokeWidth={2}
-                                d="M6 18L18 6M6 6l12 12"
-                              />
-                            </svg>
+                            <LucideIcon name="x" className="h-4 w-4" />
                           </button>
                         </div>
                       ) : (
@@ -6631,8 +6428,9 @@ function AudionutsUAGUI() {
                   Output
                 </h3>
                 {isExecuting && (
-                  <span className="ml-auto text-xs text-green-400 animate-pulse">
-                    ● Running
+                  <span className="ml-auto inline-flex items-center gap-1 text-xs text-green-400 animate-pulse">
+                    <LucideIcon name="circle" className="h-2.5 w-2.5" />
+                    Running
                   </span>
                 )}
                 {isExecuting && (
@@ -6760,19 +6558,7 @@ function AudionutsUAGUI() {
                         onClick={() => setArgSearchFilter("")}
                         className={`absolute inset-y-0 right-0 pr-3 flex items-center ${isDarkMode ? "text-gray-400 hover:text-gray-200" : "text-gray-500 hover:text-gray-700"}`}
                       >
-                        <svg
-                          className="w-4 h-4"
-                          fill="none"
-                          stroke="currentColor"
-                          viewBox="0 0 24 24"
-                        >
-                          <path
-                            strokeLinecap="round"
-                            strokeLinejoin="round"
-                            strokeWidth={2}
-                            d="M6 18L18 6M6 6l12 12"
-                          />
-                        </svg>
+                        <LucideIcon name="x" className="h-4 w-4" />
                       </button>
                     )}
                   </div>
@@ -6993,6 +6779,7 @@ function AudionutsUAGUI() {
       )}
 
       <ApplicationRail
+        trackers={trackers}
         activeWorkspace="upload"
         appBase={APP_BASE}
         appearanceControl={renderRailAppearance()}
@@ -7089,19 +6876,10 @@ function AudionutsUAGUI() {
                           : "bg-white border-gray-300 text-gray-700 placeholder-gray-400 focus:border-blue-500"
                       } focus:outline-none`}
                     />
-                    <svg
-                      className={`absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 ${isDarkMode ? "text-gray-500" : "text-gray-400"}`}
-                      fill="none"
-                      stroke="currentColor"
-                      viewBox="0 0 24 24"
-                    >
-                      <path
-                        strokeLinecap="round"
-                        strokeLinejoin="round"
-                        strokeWidth={2}
-                        d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"
-                      />
-                    </svg>
+                    <LucideIcon
+                      name="search"
+                      className={`absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 ${isDarkMode ? "text-gray-500" : "text-gray-400"}`}
+                    />
                     {fileBrowserSearch && (
                       <button
                         type="button"
@@ -7109,25 +6887,23 @@ function AudionutsUAGUI() {
                         onClick={() => handleFileBrowserSearch("")}
                         className={`absolute right-2 top-1/2 -translate-y-1/2 p-0.5 rounded ${isDarkMode ? "hover:bg-gray-700 text-gray-400" : "hover:bg-gray-200 text-gray-500"}`}
                       >
-                        <svg
-                          className="w-3.5 h-3.5"
-                          fill="none"
-                          stroke="currentColor"
-                          viewBox="0 0 24 24"
-                        >
-                          <path
-                            strokeLinecap="round"
-                            strokeLinejoin="round"
-                            strokeWidth={2}
-                            d="M6 18L18 6M6 6l12 12"
-                          />
-                        </svg>
+                        <LucideIcon name="x" className="h-3.5 w-3.5" />
                       </button>
                     )}
                   </div>
                 </div>
                 {renderSelectAllBar()}
                 <div
+                  ref={fileBrowserRef}
+                  onScroll={(event) => {
+                    if (fileBrowserRestoring) return;
+                    fileBrowserScrollTopRef.current =
+                      event.currentTarget.scrollTop;
+                    storage.set(
+                      FILE_BROWSER_SCROLL_KEY,
+                      String(fileBrowserScrollTopRef.current),
+                    );
+                  }}
                   className={`${hasDescFile && !descBrowserCollapsed ? "flex-1 max-h-[50%]" : "flex-1"} overflow-y-auto`}
                 >
                   {fileBrowserSearch ? (
@@ -7178,19 +6954,10 @@ function AudionutsUAGUI() {
                             descFilePath &&
                             !descFileError && (
                               <span className="text-green-500 ml-1">
-                                <svg
-                                  className="w-4 h-4 inline"
-                                  fill="none"
-                                  stroke="currentColor"
-                                  viewBox="0 0 24 24"
-                                >
-                                  <path
-                                    strokeLinecap="round"
-                                    strokeLinejoin="round"
-                                    strokeWidth={2}
-                                    d="M5 13l4 4L19 7"
-                                  />
-                                </svg>
+                                <LucideIcon
+                                  name="check"
+                                  className="inline h-4 w-4"
+                                />
                               </span>
                             )}
                         </h2>
@@ -7234,19 +7001,7 @@ function AudionutsUAGUI() {
                             className={`p-1 rounded ${isDarkMode ? "hover:bg-gray-700 text-gray-400" : "hover:bg-gray-200 text-gray-500"}`}
                             title="Clear selection"
                           >
-                            <svg
-                              className="w-4 h-4"
-                              fill="none"
-                              stroke="currentColor"
-                              viewBox="0 0 24 24"
-                            >
-                              <path
-                                strokeLinecap="round"
-                                strokeLinejoin="round"
-                                strokeWidth={2}
-                                d="M6 18L18 6M6 6l12 12"
-                              />
-                            </svg>
+                            <LucideIcon name="x" className="h-4 w-4" />
                           </button>
                         </div>
                       ) : (
@@ -7294,19 +7049,7 @@ function AudionutsUAGUI() {
                                 className={`p-1 rounded ${isDarkMode ? "hover:bg-gray-700 text-gray-400" : "hover:bg-gray-200 text-gray-500"}`}
                                 title="Clear selection"
                               >
-                                <svg
-                                  className="w-4 h-4"
-                                  fill="none"
-                                  stroke="currentColor"
-                                  viewBox="0 0 24 24"
-                                >
-                                  <path
-                                    strokeLinecap="round"
-                                    strokeLinejoin="round"
-                                    strokeWidth={2}
-                                    d="M6 18L18 6M6 6l12 12"
-                                  />
-                                </svg>
+                                <LucideIcon name="x" className="h-4 w-4" />
                               </button>
                             </div>
                           </div>
@@ -7410,19 +7153,7 @@ function AudionutsUAGUI() {
                           <label
                             className={`text-sm font-semibold ${isDarkMode ? "text-gray-300" : "text-gray-700"} flex items-center gap-2`}
                           >
-                            <svg
-                              className="w-4 h-4"
-                              fill="none"
-                              stroke="currentColor"
-                              viewBox="0 0 24 24"
-                            >
-                              <path
-                                strokeLinecap="round"
-                                strokeLinejoin="round"
-                                strokeWidth={2}
-                                d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1"
-                              />
-                            </svg>
+                            <LucideIcon name="link" className="h-4 w-4" />
                             Description Link URL (pastebin, hastebin, etc.):
                           </label>
                           <input
@@ -7468,30 +7199,12 @@ function AudionutsUAGUI() {
                         }`}
                       >
                         <div className="flex items-center gap-2">
-                          <svg
-                            className={`w-4 h-4 ${
+                          <LucideIcon
+                            name={descFileError ? "circle-x" : "triangle-alert"}
+                            className={`h-4 w-4 ${
                               descFileError ? "text-red-500" : "text-yellow-500"
                             }`}
-                            fill="none"
-                            stroke="currentColor"
-                            viewBox="0 0 24 24"
-                          >
-                            {descFileError ? (
-                              <path
-                                strokeLinecap="round"
-                                strokeLinejoin="round"
-                                strokeWidth={2}
-                                d="M6 18L18 6M6 6l12 12"
-                              />
-                            ) : (
-                              <path
-                                strokeLinecap="round"
-                                strokeLinejoin="round"
-                                strokeWidth={2}
-                                d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"
-                              />
-                            )}
-                          </svg>
+                          />
                           <span
                             className={`text-sm font-medium ${
                               descFileError
@@ -7594,8 +7307,9 @@ function AudionutsUAGUI() {
                     Execution Output
                   </h3>
                   {isExecuting && (
-                    <span className="ml-auto text-sm text-green-400 animate-pulse">
-                      ● Running
+                    <span className="ml-auto inline-flex items-center gap-1 text-sm text-green-400 animate-pulse">
+                      <LucideIcon name="circle" className="h-3 w-3" />
+                      Running
                     </span>
                   )}
                   {!isExecuting && (
@@ -7740,19 +7454,7 @@ function AudionutsUAGUI() {
                     onClick={() => setArgSearchFilter("")}
                     className={`absolute inset-y-0 right-0 pr-3 flex items-center ${isDarkMode ? "text-gray-400 hover:text-gray-200" : "text-gray-500 hover:text-gray-700"}`}
                   >
-                    <svg
-                      className="w-4 h-4"
-                      fill="none"
-                      stroke="currentColor"
-                      viewBox="0 0 24 24"
-                    >
-                      <path
-                        strokeLinecap="round"
-                        strokeLinejoin="round"
-                        strokeWidth={2}
-                        d="M6 18L18 6M6 6l12 12"
-                      />
-                    </svg>
+                    <LucideIcon name="x" className="h-4 w-4" />
                   </button>
                 )}
               </div>

@@ -46,10 +46,52 @@ def test_current_example_config_exposes_workflow_subsections() -> None:
 
     assert subsections["DEFAULT/update_notification"] == "MAIN SETTINGS"
     assert subsections["DEFAULT/console_show_time"] == "LOGGING"
+    assert subsections["DEFAULT/stats_enabled"] == "LOCAL STATISTICS"
     assert subsections["DEFAULT/default_torrent_client"] == "CLIENT SELECTION"
     assert subsections["DEFAULT/post_upload_hook_timeout"] == "POST-UPLOAD"
     assert subsections["USENET/enabled"] == "GENERAL SETTINGS"
     assert subsections["USENET/nzb_output_dir"] == "OUTPUT PATHS"
+
+
+def test_stats_enabled_is_grouped_with_main_settings_only_in_webui() -> None:
+    example_path = server.CODE_DIR / "data" / "example_config.py"
+    example_config = server._load_config_from_file(example_path)
+    assert example_config is not None
+    defaults = example_config["DEFAULT"]
+    original_keys = list(defaults)
+    comments, subsections = server._extract_example_metadata(example_path)
+
+    prepared = server._prepare_default_webui_section(defaults, comments, subsections)
+    items = server._build_config_items(prepared, {"stats_enabled": True}, comments, subsections, ["DEFAULT"])
+
+    headings = [item["key"] for item in items if item.get("subsection")]
+    assert headings[:2] == ["MAIN SETTINGS", "LOGGING"]
+    assert headings.count("MAIN SETTINGS") == 1
+    assert "LOCAL STATISTICS" not in headings
+    main_settings = next(item for item in items if item["key"] == "MAIN SETTINGS")
+    stats_items = [item for item in main_settings["children"] if item["key"] == "stats_enabled"]
+    assert len(stats_items) == 1
+    assert stats_items[0]["value"] is True
+    assert stats_items[0]["example_value"] is False
+    assert stats_items[0]["help"] == comments["DEFAULT/stats_enabled"]
+    assert list(defaults) == original_keys
+    assert defaults["stats_enabled"] is False
+
+
+def test_removed_keep_meta_is_not_exposed_from_existing_config() -> None:
+    user_section = {"keep_meta": True, "stats_enabled": True, "custom_setting": "preserved"}
+    items = server._build_config_items(
+        {"stats_enabled": False},
+        user_section,
+        {},
+        {"DEFAULT/stats_enabled": "MAIN SETTINGS"},
+        ["DEFAULT"],
+    )
+
+    assert [item["key"] for item in items] == ["MAIN SETTINGS", "custom_setting"]
+    assert items[0]["children"][0]["value"] is True
+    assert items[1]["value"] == "preserved"
+    assert user_section["keep_meta"] is True
 
 
 def test_current_example_config_exposes_merged_metadata_settings() -> None:
@@ -193,6 +235,30 @@ def test_config_update_removes_all_optional_arr_instance_keys(
 
     updated_config = server._load_config_from_file(config_path)
     assert updated_config == {"DEFAULT": {}}
+
+
+def test_config_update_accepts_dvd_par_boolean(tmp_path: Path, monkeypatch) -> None:
+    code_dir = tmp_path / "code"
+    state_dir = tmp_path / "state"
+    (code_dir / "data").mkdir(parents=True)
+    (state_dir / "data").mkdir(parents=True)
+    (code_dir / "data" / "example_config.py").write_text("config = {'DEFAULT': {'scale_dvd_screenshots_for_par': True}}\n", encoding="utf-8")
+    config_path = state_dir / "data" / "config.py"
+    config_path.write_text("config = {'DEFAULT': {}}\n", encoding="utf-8")
+    monkeypatch.setattr(server, "CODE_DIR", code_dir)
+    monkeypatch.setattr(server, "STATE_DIR", state_dir)
+    monkeypatch.setattr(server, "_is_authenticated", lambda: True)
+    monkeypatch.setattr(server, "_verify_csrf_header", lambda: True)
+    monkeypatch.setattr(server, "_verify_same_origin", lambda: True)
+    monkeypatch.setattr(server, "_write_audit_log", lambda *_args, **_kwargs: None)
+
+    for value, expected in ((True, True), (False, False)):
+        with server.app.test_request_context(
+            "/api/config_update", method="POST", json={"path": ["DEFAULT", "scale_dvd_screenshots_for_par"], "value": value}
+        ):
+            response = server.config_update()
+        assert response.get_json()["success"] is True
+        assert server._load_config_from_file(config_path)["DEFAULT"]["scale_dvd_screenshots_for_par"] is expected
 
 
 def test_torrent_client_template_prefers_primary_qbittorrent_example() -> None:

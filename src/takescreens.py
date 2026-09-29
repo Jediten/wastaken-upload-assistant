@@ -20,6 +20,7 @@ from pathlib import Path
 from typing import Any, cast
 
 import ffmpeg
+from PIL import Image
 
 from data import config as data_config
 from src.artwork import is_public_http_url, is_valid_cover_image, is_valid_image_bytes
@@ -31,7 +32,10 @@ from src.mediainfo import MediaInfo
 from src.meta import Meta
 from src.screenshot_manifest import clear_group as clear_screenshot_group
 from src.screenshot_manifest import files as manifest_files
+from src.screenshot_manifest import forget_file as forget_screenshot_file
 from src.screenshot_manifest import register as register_screenshots
+from src.screenshot_overlays import overlay_filters, overlay_fontfile, overlay_options
+from src.stats import record_event_async
 from src.temp_paths import artwork_dir, screenshots_dir
 from src.webui_progress import complete_progress, publish_progress
 
@@ -87,12 +91,7 @@ def xxx_single_file_screens() -> int:
 
 
 def _xxx_contact_sheet_fontfile() -> str | None:
-    candidates = (
-        Path(os.environ.get("WINDIR", r"C:\Windows")) / "Fonts" / "arial.ttf",
-        Path("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"),
-        Path("/Library/Fonts/Arial.ttf"),
-    )
-    return next((str(path) for path in candidates if path.is_file()), None)
+    return overlay_fontfile()
 
 
 def _xxx_contact_sheet_title_filter(stream: Any, title: str, include_title: bool, fontfile: str | None) -> Any:
@@ -184,7 +183,9 @@ async def xxx_contact_sheets(paths: list[str], folder_id: str, base_dir: str, me
             except Exception as error:
                 logger.warning(f"[yellow]Unable to create XXX contact sheet for {video_path.name}: {error}[/yellow]")
 
-        sheets = [str(path) for path in register_screenshots(base_dir, folder_id, results, capture_group)] if results else []
+        registered = register_screenshots(base_dir, folder_id, results, capture_group) if results else []
+        await record_event_async("artifact", service="screenshot", operation="created", category="standard", count=len(registered))
+        sheets = [str(path) for path in registered]
     normal_screens = xxx_single_file_screens()
     if len(video_paths) == 1 and normal_screens:
         existing_in_group = len(manifest_files(base_dir, folder_id, capture_group))
@@ -344,6 +345,18 @@ def discard_smallest_capture_result(capture_results: list[str]) -> str | None:
     return smallest
 
 
+def dvd_screenshot_has_content(path: str | Path) -> bool:
+    """Reject unusually small, unreadable, and near-uniform DVD frames."""
+    try:
+        if Path(path).stat().st_size < 20 * 1024:
+            return False
+        with Image.open(path) as image:
+            low, high = image.convert("L").getextrema()
+            return high >= 10 and high - low >= 10
+    except OSError, ValueError:
+        return False
+
+
 async def run_ffmpeg(command: Any) -> tuple[int | None, bytes, bytes]:
     cmd_list = compile_ffmpeg_command(command)
     process_env = os.environ.copy()
@@ -436,6 +449,12 @@ def should_scale_screenshots_for_par(config: Mapping[str, Any] | None = None) ->
     return _as_bool(settings.get("scale_screenshots_for_par"), default=False)
 
 
+def should_scale_dvd_screenshots_for_par(config: Mapping[str, Any] | None = None) -> bool:
+    """Return whether DVD screenshots should use display-corrected dimensions."""
+    settings = default_config if config is None else config
+    return _as_bool(settings.get("scale_dvd_screenshots_for_par"), default=True)
+
+
 def screenshot_par_scale_factors(
     width: float,
     height: float,
@@ -517,6 +536,9 @@ async def disc_screenshots(
             except ValueError:
                 logger.error("[red]Error: Unable to parse frame rate from bdinfo['video'][0]['fps']")
 
+    if frame_rate is not None:
+        meta.frame_rate = frame_rate
+
     file_path = file_path
 
     keyframe = "nokey" if "VC-1" in bdinfo["video"][0]["codec"] or bdinfo["video"][0]["hdr_dv"] != "" else "none"
@@ -526,7 +548,7 @@ async def disc_screenshots(
     total_existing = len(existing_screens) + len(existing_images)
     num_screens = max(0, screens - total_existing) if not force_screenshots else num_screens
     is_hdr = any(marker in meta.hdr for marker in ("HDR", "DV", "HLG"))
-    if tone_map and is_hdr:
+    if (tone_map or meta.force_tonemap) and is_hdr:
         hdr_tonemap = True
         meta.tonemapped = True
     else:
@@ -541,7 +563,7 @@ async def disc_screenshots(
 
     ss_times = await valid_ss_time([], num_screens, length, frame_rate or 24.0, meta, retake=force_screenshots)
 
-    if meta.frame_overlay:
+    if meta.frame_overlay and any(overlay_options(default_config)[key] for key in ("overlay_frame_number", "overlay_frame_type")):
         logger.info("[yellow]Getting frame information for overlays...")
         # Build list of (original_index, task) to preserve index correspondence
         frame_info_tasks_with_idx = [
@@ -570,7 +592,7 @@ async def disc_screenshots(
         from src.vs import vs_screengn
 
         before = {path.resolve() for path in screenshot_dir.glob("*.png")}
-        vs_screengn(source=file_path, encode=None, num=num_screens, dir=f"{screenshot_dir}/")
+        vs_screengn(source=file_path, encode=None, num=num_screens, dir=f"{screenshot_dir}/", config=default_config, overlays_enabled=meta.frame_overlay)
         for image_path in screenshot_dir.glob("*.png"):
             if image_path.resolve() in before:
                 continue
@@ -738,6 +760,7 @@ async def disc_screenshots(
     # The temporary descriptive names above are only used while capture is in
     # progress.  Publish completed frames under opaque UUID filenames.
     registered = register_screenshots(base_dir, folder_id, valid_results, capture_group or sanitized_filename) if valid_results else []
+    await record_event_async("artifact", service="screenshot", operation="created", category="standard", count=len(registered))
 
     multi_screens = int(default_config.get("multiScreens", 2))
     discs = meta.discs
@@ -760,47 +783,7 @@ async def capture_disc_task(index: int, file: str, ss_time: str, image_path: str
         if hdr_tonemap:
             vf_filters.extend(["zscale=transfer=linear", f"tonemap=tonemap={algorithm}:desat={desat}", "zscale=transfer=bt709", "format=rgb24"])
 
-        if meta.frame_overlay:
-            # Get frame info from pre-collected data if available
-            frame_info = meta.frame_info_map.get(ss_time, {})
-
-            frame_rate = meta.frame_rate if meta.frame_rate is not None else 24.0
-            frame_number = int(float(ss_time) * frame_rate)
-
-            # If we have PTS time from frame info, use it to calculate a more accurate frame number
-            if "pts_time" in frame_info:
-                # Only use PTS time for frame number calculation if it makes sense
-                # (sometimes seeking can give us a frame from the beginning instead of where we want)
-                pts_time = frame_info.get("pts_time", 0)
-                if pts_time > 1.0 and abs(pts_time - ss_time) < 10:
-                    frame_number = int(pts_time * frame_rate)
-
-            frame_type = frame_info.get("frame_type", "Unknown")
-
-            text_size = int(default_config.get("overlay_text_size", 18))
-            # Get the resolution and convert it to integer
-            resol = int("".join(filter(str.isdigit, (meta.resolution if meta.resolution is not None else "1080p"))))
-            font_size = round(text_size * resol / 1080)
-            border_width = round(2 * resol / 1080)
-            x_all = round(10 * resol / 1080)
-
-            # Scale vertical spacing based on font size
-            line_spacing = round(font_size * 1.1)
-            y_number = x_all
-            y_type = y_number + line_spacing
-            y_hdr = y_type + line_spacing
-
-            # Frame number
-            vf_filters.append(
-                f"drawtext=text='Frame Number\\: {frame_number}':fontcolor=white:fontsize={font_size}:x={x_all}:y={y_number}:borderw={border_width}:bordercolor=black"
-            )
-
-            # Frame type
-            vf_filters.append(f"drawtext=text='Frame Type\\: {frame_type}':fontcolor=white:fontsize={font_size}:x={x_all}:y={y_type}:borderw={border_width}:bordercolor=black")
-
-            # HDR status
-            if hdr_tonemap:
-                vf_filters.append(f"drawtext=text='Tonemapped HDR':fontcolor=white:fontsize={font_size}:x={x_all}:y={y_hdr}:borderw={border_width}:bordercolor=black")
+        vf_filters.extend(overlay_filters(default_config, meta, ss_time, hdr_tonemap))
 
         # Build command
         # Always ensure at least format filter is present for PNG compression to work
@@ -837,6 +820,26 @@ async def capture_disc_task(index: int, file: str, ss_time: str, image_path: str
         return None
 
 
+async def matching_dvd_title(disc_path: Path, expected_duration: float) -> int | None:
+    """Find the DVD title whose playback duration matches the selected IFO."""
+    if expected_duration <= 0 or not (disc_path / "VIDEO_TS.IFO").is_file():
+        return None
+    try:
+        probe_binary = configured_binary("ffprobe_path", {"DEFAULT": default_config}) or "ffprobe"
+    except FileNotFoundError:
+        return None
+
+    for title in range(1, 100):
+        try:
+            info = await asyncio.to_thread(ffmpeg.probe, str(disc_path), cmd=probe_binary, f="dvdvideo", title=title)
+            duration = float(info["format"]["duration"])
+        except ffmpeg.Error, FileNotFoundError, KeyError, TypeError, ValueError, OSError:
+            continue
+        if abs(duration - expected_duration) <= max(30.0, expected_duration * 0.02):
+            return title
+    return None
+
+
 async def dvd_screenshots(
     meta: Meta,
     disc_num: int,
@@ -862,7 +865,14 @@ async def dvd_screenshots(
     sanitized_disc_name = await sanitize_filename(meta.discs[disc_num]["name"])
     screenshot_dir = screenshots_dir(meta.base_dir, meta.uuid)
     existing_screens = [str(p) for p in manifest_files(meta.base_dir, meta.uuid, sanitized_disc_name)]
-    normal_screens = existing_screens
+    normal_screens = []
+    for image in existing_screens:
+        if dvd_screenshot_has_content(image):
+            normal_screens.append(image)
+            continue
+        logger.info(f"[yellow]Removing blank or unreadable registered DVD screenshot: {image}[/yellow]")
+        Path(image).unlink(missing_ok=True)
+        forget_screenshot_file(meta.base_dir, meta.uuid, Path(image))
     if len(normal_screens) >= num_screens:
         i = num_screens
         logger.info("[bold green]Reusing screenshots")
@@ -876,26 +886,30 @@ async def dvd_screenshots(
     width: float = 0.0
     height: float = 0.0
     frame_rate: float = 24.0
+    ifo_duration = 0.0
     tracks: list[Any] = []
     tracks.extend(cast(list[Any], getattr(ifo_mi, "tracks", [])))
     for track in tracks:
         if track.track_type == "Video":
             if isinstance(track.duration, str):
                 durations = [float(d) for d in track.duration.split(" / ")]
-                _ = max(durations) / 1000  # Use the longest duration (unused)
+                ifo_duration = max(durations) / 1000
             else:
-                _ = float(track.duration) / 1000  # Convert to seconds (unused)
+                ifo_duration = float(track.duration) / 1000
 
             par = float(track.pixel_aspect_ratio)
             dar = float(track.display_aspect_ratio)
             width = float(track.width)
             height = float(track.height)
             frame_rate = float(track.frame_rate)
-    w_sar, h_sar = screenshot_par_scale_factors(width, height, par, dar)
+    meta.frame_rate = frame_rate
+    w_sar, h_sar = screenshot_par_scale_factors(width, height, par, dar, should_scale_dvd_screenshots_for_par())
 
     main_set = meta.discs[disc_num]["main_set"]
     content_vobs = [vob for vob in main_set if not vob.upper().endswith("_0.VOB")] or main_set
     title_vobs = [str(Path(meta.discs[disc_num]["path"]) / f"VTS_{vob}") for vob in content_vobs]
+    disc_path = Path(meta.discs[disc_num]["path"])
+    dvd_title = await matching_dvd_title(disc_path, ifo_duration)
     input_file = title_vobs[0] if len(title_vobs) == 1 else f"concat:{'|'.join(title_vobs)}"
     voblength = 0.0
     for title_vob in title_vobs:
@@ -912,6 +926,8 @@ async def dvd_screenshots(
             logger.error(f"[red]Error parsing VOB {title_vob}: {e}")
     if not voblength:
         voblength = 300
+    if ifo_duration:
+        voblength = ifo_duration
     ss_times = await valid_ss_time([], num_screens, voblength, frame_rate, meta, retake=retry_cap)
     capture_tasks: list[Awaitable[tuple[int, str | None]]] = []
     existing_images_count = 0
@@ -920,6 +936,10 @@ async def dvd_screenshots(
     for i in range(num_screens + 1):
         image = str(screenshot_dir / f"{sanitized_disc_name}-{i}.png")
         if Path(image).exists() and not meta.retake:
+            if not dvd_screenshot_has_content(image):
+                logger.info(f"[yellow]Removing blank or unreadable DVD screenshot: {image}[/yellow]")
+                Path(image).unlink(missing_ok=True)
+                continue
             existing_images_count += 1
             existing_image_paths.append(image)
 
@@ -936,9 +956,11 @@ async def dvd_screenshots(
         image_paths.append(image)
         input_files.append(input_file)
 
-    if meta.frame_overlay:
+    if meta.frame_overlay and any(overlay_options(default_config)[key] for key in ("overlay_frame_number", "overlay_frame_type")):
         logger.debug("[yellow]Getting frame information for overlays...")
-        frame_info_tasks = [get_frame_info(input_files[i], ss_times[i], meta) for i in range(num_screens + 1) if not Path(image_paths[i]).exists() or meta.retake]
+        frame_info_tasks = [
+            get_frame_info(input_files[i], ss_times[i], meta, dvd_title=dvd_title) for i in range(num_screens + 1) if not Path(image_paths[i]).exists() or meta.retake
+        ]
 
         frame_info_results = await asyncio.gather(*frame_info_tasks)
         meta.frame_info_map = {}
@@ -955,13 +977,13 @@ async def dvd_screenshots(
     # Create semaphore to limit concurrent tasks
     semaphore = asyncio.Semaphore(task_limit)
 
-    async def capture_dvd_with_semaphore(args: tuple[int, str, str, str, Meta, float, float, float, float]) -> tuple[int, str | None]:
+    async def capture_dvd_with_semaphore(args: tuple[int, str, str, str, Meta, float, float, float, float, int | None]) -> tuple[int, str | None]:
         async with semaphore:
             return await capture_dvd_screenshot(args)
 
     for i in range(num_screens + 1):
         if not Path(image_paths[i]).exists() or meta.retake:
-            capture_tasks.append(capture_dvd_with_semaphore((i, input_files[i], image_paths[i], ss_times[i], meta, width, height, w_sar, h_sar)))
+            capture_tasks.append(capture_dvd_with_semaphore((i, input_files[i], image_paths[i], ss_times[i], meta, width, height, w_sar, h_sar, dvd_title)))
 
     capture_results: list[str] = []
     results = await asyncio.gather(*capture_tasks)
@@ -973,9 +995,6 @@ async def dvd_screenshots(
     filtered_results.sort(key=lambda x: x[0])  # Ensure order is preserved
     capture_results = [r[1] for r in filtered_results if r[1] is not None]
 
-    if capture_results and len(capture_results) > num_screens:
-        discard_smallest_capture_result(capture_results)
-
     valid_results: list[str] = []
     remaining_retakes: list[str] = []
 
@@ -984,29 +1003,23 @@ async def dvd_screenshots(
             logger.info(f"[red]{image}")
             continue
 
-        retake = False
-        image_size = Path(image).stat().st_size
-        if image_size <= 120000:
-            logger.info(f"[yellow]Image {image} is incredibly small, retaking.")
-            retake = True
-
-        if retake:
-            retry_attempts = 3
-            for attempt in range(1, retry_attempts + 1):
+        if not dvd_screenshot_has_content(image):
+            logger.info(f"[yellow]Image {image} is blank or unreadable, retaking.[/yellow]")
+            retry_attempts = 8
+            retry_times = [
+                random.uniform(voblength * (0.05 + 0.85 * i / retry_attempts), voblength * (0.05 + 0.85 * (i + 1) / retry_attempts))  # nosec B311  # noqa: S311
+                for i in range(retry_attempts)
+            ]
+            random.shuffle(retry_times)  # nosec B311 - Random screenshot timing, not cryptographic
+            retry_image = str(Path(image).with_name(f"{Path(image).stem}-retry.png"))
+            for attempt, adjusted_time in enumerate(retry_times, start=1):
                 logger.info(f"[yellow]Retaking screenshot for: {image} (Attempt {attempt}/{retry_attempts})[/yellow]")
 
                 index = int(image.rsplit("-", 1)[-1].split(".")[0])
-                adjusted_time = random.uniform(0, voblength)  # nosec B311 - Random screenshot timing, not cryptographic  # noqa: S311
-
-                if Path(image).exists():  # Prevent unnecessary deletion error
-                    try:
-                        Path(image).unlink()
-                    except Exception as e:
-                        logger.error(f"[red]Failed to delete {image}: {e}[/red]")
-                        break
 
                 try:
-                    screenshot_response = await capture_dvd_screenshot((index, input_file, image, str(adjusted_time), meta, width, height, w_sar, h_sar))
+                    Path(retry_image).unlink(missing_ok=True)
+                    screenshot_response = await capture_dvd_screenshot((index, input_file, retry_image, str(adjusted_time), meta, width, height, w_sar, h_sar, dvd_title))
 
                     index, screenshot_result = screenshot_response  # Safe unpacking
 
@@ -1014,25 +1027,32 @@ async def dvd_screenshots(
                         logger.error(f"[red]Failed to capture screenshot for {image}. Retrying...[/red]")
                         continue
 
-                    retaken_size = Path(screenshot_result).stat().st_size
-                    if retaken_size > 75000:
-                        logger.info(f"[green]Successfully retaken screenshot for: {screenshot_result} ({retaken_size} bytes)[/green]")
-                        valid_results.append(screenshot_result)
+                    if dvd_screenshot_has_content(screenshot_result):
+                        retaken_size = Path(screenshot_result).stat().st_size
+                        Path(screenshot_result).replace(image)
+                        logger.info(f"[green]Successfully retaken screenshot for: {image} ({retaken_size} bytes)[/green]")
+                        valid_results.append(image)
                         break
-                    logger.info(f"[red]Retaken image {screenshot_result} is still too small. Retrying...[/red]")
+                    logger.info(f"[red]Retaken image {screenshot_result} is blank or unreadable. Retrying...[/red]")
                 except Exception as e:
                     logger.error(f"[red]Error capturing screenshot for {input_file} at {adjusted_time}: {e}[/red]")
+                finally:
+                    Path(retry_image).unlink(missing_ok=True)
 
             else:
                 logger.info(f"[red]All retry attempts failed for {image}. Skipping.[/red]")
+                Path(image).unlink(missing_ok=True)
                 remaining_retakes.append(image)
         else:
             valid_results.append(image)
+    if len(valid_results) > num_screens:
+        discard_smallest_capture_result(valid_results)
     if remaining_retakes:
         logger.info(f"[red]The following images could not be retaken successfully: {remaining_retakes}[/red]")
 
     if valid_results:
-        register_screenshots(meta.base_dir, meta.uuid, valid_results, sanitized_disc_name)
+        registered = register_screenshots(meta.base_dir, meta.uuid, valid_results, sanitized_disc_name)
+        await record_event_async("artifact", service="screenshot", operation="created", category="standard", count=len(registered))
 
     if not retry_cap and meta.debug:
         logger.info(f"[green]Successfully captured {len(valid_results)} screenshots.")
@@ -1049,29 +1069,15 @@ async def dvd_screenshots(
         await cleanup_manager.cleanup()
 
 
-async def capture_dvd_screenshot(task: tuple[int, str, str, str, Meta, float, float, float, float]) -> tuple[int, str | None]:
-    index, input_file, image, seek_time_str, meta, width, height, w_sar, h_sar = task
+async def capture_dvd_screenshot(
+    task: tuple[int, str, str, str, Meta, float, float, float, float] | tuple[int, str, str, str, Meta, float, float, float, float, int | None],
+) -> tuple[int, str | None]:
+    index, input_file, image, seek_time_str, meta, width, height, w_sar, h_sar, *title_option = task
+    dvd_title = title_option[0] if title_option else None
     seek_time = float(seek_time_str)
 
     try:
         loglevel = "verbose" if meta.ffdebug else "quiet"
-        video_duration: float | None = None
-        if not input_file.startswith("concat:"):
-            media_info = MediaInfo.parse(input_file)
-            tracks: list[Any] = []
-            tracks.extend(cast(list[Any], getattr(media_info, "tracks", [])))
-            for track in tracks:
-                if track.track_type == "Video":
-                    try:
-                        if track.duration is not None:
-                            video_duration = float(track.duration) / 1000
-                    except TypeError, ValueError:
-                        video_duration = None
-                    break
-
-        if video_duration and seek_time > video_duration:
-            seek_time = max(0, video_duration - 1)
-
         # Build filter chain
         vf_filters: list[str] = []
         if w_sar != 1 or h_sar != 1:
@@ -1079,42 +1085,7 @@ async def capture_dvd_screenshot(task: tuple[int, str, str, str, Meta, float, fl
             scaled_h = round_to_even(height * h_sar)
             vf_filters.append(f"scale={scaled_w}:{scaled_h}")
 
-        if meta.frame_overlay:
-            # Get frame info from pre-collected data if available
-            frame_info = meta.frame_info_map.get(str(seek_time), {})
-
-            frame_rate = meta.frame_rate if meta.frame_rate is not None else 24.0
-            frame_number = int(seek_time * frame_rate)
-
-            # If we have PTS time from frame info, use it to calculate a more accurate frame number
-            if "pts_time" in frame_info:
-                # Only use PTS time for frame number calculation if it makes sense
-                # (sometimes seeking can give us a frame from the beginning instead of where we want)
-                pts_time = frame_info.get("pts_time", 0)
-                if pts_time > 1.0 and abs(pts_time - seek_time) < 10:
-                    frame_number = int(pts_time * frame_rate)
-
-            frame_type = frame_info.get("frame_type", "Unknown")
-
-            text_size = int(default_config.get("overlay_text_size", 18))
-            # Get the resolution and convert it to integer
-            resol = int("".join(filter(str.isdigit, (meta.resolution if meta.resolution is not None else "576p"))))
-            font_size = round(text_size * resol / 576)
-            border_width = round(2 * resol / 576)
-            x_all = round(10 * resol / 576)
-
-            # Scale vertical spacing based on font size
-            line_spacing = round(font_size * 1.1)
-            y_number = x_all
-            y_type = y_number + line_spacing
-
-            # Frame number
-            vf_filters.append(
-                f"drawtext=text='Frame Number\\: {frame_number}':fontcolor=white:fontsize={font_size}:x={x_all}:y={y_number}:borderw={border_width}:bordercolor=black"
-            )
-
-            # Frame type
-            vf_filters.append(f"drawtext=text='Frame Type\\: {frame_type}':fontcolor=white:fontsize={font_size}:x={x_all}:y={y_type}:borderw={border_width}:bordercolor=black")
+        vf_filters.extend(overlay_filters(default_config, meta, seek_time, False, dvd=True))
 
         # Build command
         # Always ensure at least format filter is present for PNG compression to work
@@ -1123,10 +1094,17 @@ async def capture_dvd_screenshot(task: tuple[int, str, str, str, Meta, float, fl
         vf_chain = ",".join(vf_filters)
 
         # Build ffmpeg-python command and run via run_ffmpeg
+        input_options: dict[str, Any] = {}
+        output_options: dict[str, Any] = {"ss": str(seek_time)}
+        source = input_file
+        if dvd_title is not None:
+            input_options.update(format="dvdvideo", title=dvd_title, ss=str(seek_time))
+            output_options.clear()
+            source = str(Path(input_file.removeprefix("concat:").split("|", 1)[0]).parent)
         info_command: Any = (
             cast(Any, ffmpeg)
-            .input(input_file, ss=str(seek_time), accurate_seek=None)
-            .output(image, vframes=1, vf=vf_chain, compression_level=ffmpeg_compression, pred="mixed")
+            .input(source, **input_options)
+            .output(image, vframes=1, vf=vf_chain, compression_level=ffmpeg_compression, pred="mixed", update=1, **output_options)
             .global_args("-y", "-loglevel", loglevel, "-hide_banner")
         )
 
@@ -1134,6 +1112,17 @@ async def capture_dvd_screenshot(task: tuple[int, str, str, str, Meta, float, fl
             logger.info(f"[cyan]FFmpeg command: {' '.join(compile_ffmpeg_command(info_command))}[/cyan]")
 
         returncode, _stdout, stderr = await run_ffmpeg(info_command)
+
+        if returncode != 0 and dvd_title is not None:
+            logger.warning(f"[yellow]DVD title capture failed at {seek_time}s; retrying with VOB decoding.[/yellow]")
+            Path(image).unlink(missing_ok=True)
+            fallback_command: Any = (
+                cast(Any, ffmpeg)
+                .input(input_file)
+                .output(image, ss=str(seek_time), vframes=1, vf=vf_chain, compression_level=ffmpeg_compression, pred="mixed", update=1)
+                .global_args("-y", "-loglevel", loglevel, "-hide_banner")
+            )
+            returncode, _stdout, stderr = await run_ffmpeg(fallback_command)
 
         if returncode != 0:
             logger.error(f"[red]Error capturing screenshot for {input_file} at {seek_time}s:[/red]\n{stderr.decode()}")
@@ -1770,6 +1759,7 @@ async def generate_ebook_screenshots(
 
             logger.info(traceback.format_exc())
 
+    await record_event_async("artifact", service="screenshot", operation="created", category="standard", count=len(screenshots))
     return screenshots
 
 
@@ -1941,7 +1931,7 @@ async def screenshots(
     if not ss_times:
         ss_times = await valid_ss_time([], num_capture, length, frame_rate, meta, retake=force_screenshots)
 
-    if meta.frame_overlay:
+    if meta.frame_overlay and any(overlay_options(default_config)[key] for key in ("overlay_frame_number", "overlay_frame_type")):
         logger.debug("[yellow]Getting frame information for overlays...")
         # Build list of (original_index, task) to preserve index correspondence
         frame_info_tasks_with_idx = [
@@ -2079,6 +2069,7 @@ async def screenshots(
         if retake:
             retry_attempts = 5
             retry_offsets = [5.0, 10.0, -10.0, 100.0, -100.0]
+            retry_image = str(Path(image_path).with_name(f"{Path(image_path).stem}-retry.png"))
             frame_rate = meta.frame_rate if meta.frame_rate is not None else 24.0
             original_index = int(image_path.rsplit("-", 1)[-1].split(".")[0])
             original_time = ss_times[original_index] if original_index < len(ss_times) else None
@@ -2091,11 +2082,10 @@ async def screenshots(
                             f"[yellow]Retaking screenshot for: {image_path} (Attempt {attempt}/{retry_attempts}) at {adjusted_time:.2f}s (offset {offset:+.2f}s)[/yellow]"
                         )
                         try:
-                            if Path(image_path).exists():
-                                Path(image_path).unlink()
+                            Path(retry_image).unlink(missing_ok=True)
 
                             screenshot_response = await capture_screenshot(
-                                (original_index, path, adjusted_time, image_path, width, height, w_sar, h_sar, loglevel, hdr_tonemap, meta)
+                                (original_index, path, adjusted_time, retry_image, width, height, w_sar, h_sar, loglevel, hdr_tonemap, meta)
                             )
 
                             if not isinstance(screenshot_response, tuple) or len(screenshot_response) != 2:
@@ -2131,10 +2121,13 @@ async def screenshots(
                                 valid_image = True
 
                             if valid_image:
-                                valid_results.append(screenshot_path)
+                                Path(screenshot_path).replace(image_path)
+                                valid_results.append(image_path)
                                 break
                         except Exception as e:
                             logger.error(f"[red]Error retaking screenshot for {image_path} at {adjusted_time:.2f}s: {e}[/red]")
+                        finally:
+                            Path(retry_image).unlink(missing_ok=True)
                     else:
                         continue
                     break
@@ -2142,10 +2135,9 @@ async def screenshots(
                 random_time = random.uniform(0, length)  # nosec B311 - Random screenshot timing, not cryptographic  # noqa: S311
                 logger.info(f"[yellow]Retaking screenshot for: {image_path} (Attempt {attempt}/{retry_attempts}) at random time {random_time:.2f}s[/yellow]")
                 try:
-                    if Path(image_path).exists():
-                        Path(image_path).unlink()
+                    Path(retry_image).unlink(missing_ok=True)
 
-                    screenshot_response = await capture_screenshot((original_index, path, random_time, image_path, width, height, w_sar, h_sar, loglevel, hdr_tonemap, meta))
+                    screenshot_response = await capture_screenshot((original_index, path, random_time, retry_image, width, height, w_sar, h_sar, loglevel, hdr_tonemap, meta))
 
                     if not isinstance(screenshot_response, tuple) or len(screenshot_response) != 2:
                         continue
@@ -2176,10 +2168,13 @@ async def screenshots(
                         valid_image = True
 
                     if valid_image:
-                        valid_results.append(screenshot_path)
+                        Path(screenshot_path).replace(image_path)
+                        valid_results.append(image_path)
                         break
                 except Exception as e:
                     logger.error(f"[red]Error retaking screenshot for {image_path} at random time {random_time:.2f}s: {e}[/red]")
+                finally:
+                    Path(retry_image).unlink(missing_ok=True)
             else:
                 logger.info(f"[red]All retry attempts failed for {image_path}. Skipping.[/red]")
                 remaining_retakes.append(image_path)
@@ -2219,6 +2214,7 @@ async def screenshots(
     )
 
     new_screens = register_screenshots(base_dir, folder_id, valid_results, group) if valid_results else []
+    await record_event_async("artifact", service="screenshot", operation="created", category="standard", count=len(new_screens))
     if not force_screenshots and not meta.retake:
         return [str(screen) for screen in manifest_files(base_dir, folder_id, group)[:requested_screens]]
     return [str(screen) for screen in new_screens] or None
@@ -2409,47 +2405,7 @@ async def capture_screenshot(args: tuple[int, str, float, str, float, float, flo
                 ]
             )
 
-        if meta.frame_overlay:
-            # Get frame info from pre-collected data if available
-            frame_info = meta.frame_info_map.get(str(ss_time), {})
-
-            frame_rate = meta.frame_rate if meta.frame_rate is not None else 24.0
-            frame_number = int(ss_time * frame_rate)
-
-            # If we have PTS time from frame info, use it to calculate a more accurate frame number
-            if "pts_time" in frame_info:
-                # Only use PTS time for frame number calculation if it makes sense
-                # (sometimes seeking can give us a frame from the beginning instead of where we want)
-                pts_time = frame_info.get("pts_time", 0)
-                if pts_time > 1.0 and abs(pts_time - ss_time) < 10:
-                    frame_number = int(pts_time * frame_rate)
-
-            frame_type = frame_info.get("frame_type", "Unknown")
-
-            text_size = int(default_config.get("overlay_text_size", 18))
-            # Get the resolution and convert it to integer
-            resol = int("".join(filter(str.isdigit, (meta.resolution if meta.resolution is not None else "1080p"))))
-            font_size = round(text_size * resol / 1080)
-            border_width = round(2 * resol / 1080)
-            x_all = round(10 * resol / 1080)
-
-            # Scale vertical spacing based on font size
-            line_spacing = round(font_size * 1.1)
-            y_number = x_all
-            y_type = y_number + line_spacing
-            y_hdr = y_type + line_spacing
-
-            # Frame number
-            vf_filters.append(
-                f"drawtext=text='Frame Number\\: {frame_number}':fontcolor=white:fontsize={font_size}:x={x_all}:y={y_number}:borderw={border_width}:bordercolor=black"
-            )
-
-            # Frame type
-            vf_filters.append(f"drawtext=text='Frame Type\\: {frame_type}':fontcolor=white:fontsize={font_size}:x={x_all}:y={y_type}:borderw={border_width}:bordercolor=black")
-
-            # HDR status
-            if hdr_tonemap:
-                vf_filters.append(f"drawtext=text='Tonemapped HDR':fontcolor=white:fontsize={font_size}:x={x_all}:y={y_hdr}:borderw={border_width}:bordercolor=black")
+        vf_filters.extend(overlay_filters(default_config, meta, ss_time, hdr_tonemap))
 
         # Build command
         # Always ensure at least format filter is present for PNG compression to work
@@ -2546,12 +2502,16 @@ async def valid_ss_time(ss_times: list[str], num_screens: int, length: float, fr
     return sorted(result_times)
 
 
-async def get_frame_info(path: str, ss_time: str | float, meta: Meta) -> dict[str, Any]:
+async def get_frame_info(path: str, ss_time: str | float, meta: Meta, dvd_title: int | None = None) -> dict[str, Any]:
     """Get frame information (type, exact timestamp) for a specific frame"""
     try:
         ss_time_value = float(ss_time)
         ffmpeg_module = cast(Any, ffmpeg)
-        info_ff = ffmpeg_module.input(path, ss=ss_time_value)
+        if dvd_title is not None:
+            dvd_path = str(Path(path.removeprefix("concat:").split("|", 1)[0]).parent)
+            info_ff = ffmpeg_module.input(dvd_path, ss=ss_time_value, format="dvdvideo", title=dvd_title)
+        else:
+            info_ff = ffmpeg_module.input(path, ss=ss_time_value)
         # Use video stream selector and apply showinfo filter
         filtered = info_ff["v:0"].filter("showinfo")
         info_command = filtered.output("-", format="null", vframes=1).global_args("-loglevel", "info")
@@ -2586,6 +2546,8 @@ async def get_frame_info(path: str, ss_time: str | float, meta: Meta) -> dict[st
         pts_time_match = re.search(r"pts_time:(\d+\.\d+)", stderr_text)
         if pts_time_match:
             exact_time = float(pts_time_match.group(1))
+            if dvd_title is not None and exact_time < ss_time_value:
+                exact_time += ss_time_value
             frame_info["pts_time"] = exact_time
             # Recalculate frame number based on exact PTS time if available
             frame_info["frame_number"] = int(exact_time * frame_rate)
@@ -2679,7 +2641,7 @@ async def determine_tonemapping(w_sar: float, h_sar: float, width: float, height
     """Select a verified tonemapping path and record its actual metadata state."""
     meta.libplacebo = False
     meta.tonemapped = False
-    if not tone_map or not any(marker in meta.hdr for marker in ("HDR", "DV", "HLG")):
+    if not (tone_map or meta.force_tonemap) or not any(marker in meta.hdr for marker in ("HDR", "DV", "HLG")):
         return False
 
     if use_libplacebo and not meta.frame_overlay:
@@ -2802,7 +2764,9 @@ class TakeScreensManager:
     ) -> None:
         await dvd_screenshots(meta, disc_num, num_screens, retry_cap, cleanup_after_capture)
 
-    async def capture_dvd_screenshot(self, task: tuple[int, str, str, str, Meta, float, float, float, float]) -> tuple[int, str | None]:
+    async def capture_dvd_screenshot(
+        self, task: tuple[int, str, str, str, Meta, float, float, float, float] | tuple[int, str, str, str, Meta, float, float, float, float, int | None]
+    ) -> tuple[int, str | None]:
         return await capture_dvd_screenshot(task)
 
     async def screenshots(

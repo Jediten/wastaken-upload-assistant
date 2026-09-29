@@ -13,6 +13,7 @@ For a minimal first run, see the [WebUI Quick Start](web-ui-basic.md). Docker an
 - [Monitoring and reviewing a run](#monitoring-and-reviewing-a-run)
 - [Configuration workspace](#configuration-workspace)
 - [Security and administration](#security-and-administration)
+- [Statistics](#statistics)
 - [Appearance, Help, and Changelog](#appearance-help-and-changelog)
 - [Mobile layout](#mobile-layout)
 - [Troubleshooting](#troubleshooting)
@@ -86,7 +87,7 @@ The sign-in and recovery pages use the color theme, light/dark mode, and corner 
 
 The desktop interface has three main areas:
 
-1. **Application rail:** switches between Upload and Configuration and opens Changelog, Help, Appearance, or Log out.
+1. **Application rail:** switches between Upload, Configuration, and Stats and opens Changelog, Help, Appearance, or Log out.
 2. **Workspace navigation:** File Browser on the Upload page or the settings navigation on the Configuration page.
 3. **Main workspace:** upload controls, execution output, configuration fields, or administration tools.
 
@@ -146,7 +147,7 @@ While an upload is active, the workspace changes from setup controls to live run
 - The page header shows the current state and selected path.
 - **Execution Output** streams the Upload Assistant console.
 - **Binary Progress** reports progress from external tools when available.
-- **Now Processing** shows the current media poster, identifiers, technical details, overview, and source path when metadata is available.
+- **Now Processing** uses a poster-first live summary with provider identifiers, technical release details, overview, and category-specific metadata for movies, TV, books, music, games, and adult releases.
 - **Kill** terminates the active run.
 
 ### Generated screenshots
@@ -193,6 +194,18 @@ Hover or focus an information icon beside a setting to read its description. The
 
 The editor combines bundled defaults from `data/example_config.py` with overrides from the user-state `data/config.py`. If no usable `config.py` exists, the interface displays the example defaults and warns that they have not yet been saved. Successful configuration writes are recorded in `data/config_audit.log`; sensitive values are redacted from that audit trail.
 
+### Tracker API key expiry
+
+UNIT3D tracker cards display **API key expires soon** within 14 days of the last reported expiry, or **API key expired** after that date. The API key field has a **Check** button beside it and a compact status beside its heading, wrapping below the heading when space is limited. Hover, focus or tap that status for the exact expiry date and last-checked time. Checking makes a small authenticated search request with the entered key; it does not save pending configuration changes. If the field is empty, the check can use the tracker's key from the saved Prowlarr connection.
+
+An **API keys** indicator appears in the application rail when configured keys need attention: amber for approaching expiry, red if any have expired. Open it to see affected trackers and jump directly to their Config fields. On phones, the indicator appears in Config navigation and the Upload header. It uses the loaded tracker catalogue and makes no additional tracker requests. Checking a saved key updates the Config indicator immediately; checking an unsaved replacement leaves the saved key's warning in place. Reload the page to pick up observations made elsewhere.
+
+UA also learns expiry dates from normal UNIT3D searches, uploads and shared tracker metadata/check requests. Both the CLI and WebUI upload console warn once per selected tracker/key per run. Cached dates are checked when trackers are selected, and new observations can warn during the run. Warnings are advisory and do not block uploads or replace normal authentication checks.
+
+Expiry metadata is stored in `data/api_key_expiry.sqlite3` under the user-state directory. Records contain a hash identifying the tracker, site and key, plus expiry and observation times; the API key itself is not stored there. Changing the key makes the old record inapplicable. These dates are observations, not a guarantee that a key has not subsequently been revoked.
+
+UA reads the ISO 8601 `X-Api-Key-Expires-At` response header and can also interpret an explicit `api_key.expires_at` value in a JSON response. LST documents that omitting the header on an authenticated response means no expiry. On other trackers, an omitted header means expiry is unknown; explicit JSON `null` means no expiry. Authentication errors, invalid dates and failed requests do not erase an earlier observation. Unknown and non-expiring keys do not generate warnings.
+
 ### Personal release groups
 
 Under **Configuration → General → Main Settings**, enter a release-group name in **Personal Release Groups** and press Space, Enter, or comma to add it. Each group appears as a compact tag; select its **×** button to remove it. Matching is case-insensitive, and a detected matching group automatically marks the upload as a personal release.
@@ -223,9 +236,19 @@ Each priority selector continues to list all configured image hosts, including h
 - Use **Configured Trackers** to review, rename, edit, or remove existing tracker entries.
 - Use **Available Trackers** to add a supported tracker from its template.
 
+Configured and Available tracker searches accept names, tracker codes and CLI aliases, ignoring case. Search uses each tracker's saved alias (or its template alias if unsaved) and any pending alias edit. After saving an alias change, search uses the new alias.
+
+Each tracker's **Advanced → CLI Alias** field provides an optional shorthand for `-tk` or `--trackers`. The full tracker code still works regardless of the alias, and aliases do not rename tracker cards or change the default tracker list.
+
+On the Upload page, entering an alias such as `-tk ATH` highlights the corresponding tracker card. Alias matching ignores case and uses the saved configuration. Conflicting aliases are rejected when saving, using the same rules as the CLI; a batch can swap two aliases because validation uses the final values.
+
 Default and Configured Trackers also show the cached availability dot used by the Upload page. Choose **Check tracker status** to refresh those credential-free checks. Any detected issue is summarized above the tracker list; Available Trackers are not checked until they have been configured.
 
 New trackers and tracker edits remain pending until the configuration is saved.
+
+**Save Config** sends pending field edits together in one request, including changes across multiple trackers. All field edits in that batch are validated before the file is written. If the server rejects the save, the edits remain pending so you can correct them or retry without re-entering them.
+
+WebUI configuration writes share a lock with startup synchronization and replace the file atomically. Missing parent sections in sparse configurations are created during staging. External changes detected before replacement cause the save to be rejected, preserving the newer file and the pending WebUI edits.
 
 ## Security and administration
 
@@ -263,6 +286,20 @@ The blacklist takes precedence over the whitelist. Repeated failed API access at
 
 The local account, encrypted credentials, token metadata, 2FA state, IP controls, and access-log level are stored in `webui_auth.json`. Access events are written to `access_log.log` in the same application configuration directory. The generated `session_secret` is also stored there unless `SESSION_SECRET` or `SESSION_SECRET_FILE` overrides it.
 
+## Statistics
+
+Open **Stats** from the application workspace navigation to inspect local activity for today, this or last month, the last 7, 30, or 90 days, one year, a custom inclusive interval, or the full recorded period. The selected preset is remembered in the current browser. Real uploads and `--debug` simulations are stored and displayed separately.
+
+Use **Display** in the Stats toolbar to choose real activity or debug simulations, UTC or the browser's local date, and a regional date format. UTC remains the default. Browser-local mode makes presets such as **Today** follow the date on the device viewing the dashboard. Historical statistics remain stored in UTC calendar-day buckets, so activity near midnight remains assigned to its original UTC day; this limitation is also shown beside the setting. The same dialog can hide an entire summary group, individual cards within a group, or detailed dashboard sections. It can also add a soft color gradient around Daily activity lines and hide tracker/indexer favicons. Display preferences are saved in the current browser and do not delete or stop collection of hidden data.
+
+The dashboard includes upload success and pioneering rates by destination, a route Sankey, media categories and technical profiles, a resolution×video/HDR matrix, torrents and NZBs created or reused, cache hit rates, logical external operations, known payload bytes sent through NNTP and successful image uploads, and CLI versus WebUI usage. **Successful media time** shows the total uploaded runtime and its Movie, TV, Sports, XXX, Audiobook, and Music distribution. Each successfully processed item is counted once globally even when it was uploaded to several destinations; selecting a tracker shows the runtime successfully uploaded to that destination. Unknown runtimes and content without a meaningful duration, such as ebooks and games, are excluded. The timeline switches between event counts, processed/uploaded volume, or both scales. Clicking a destination filters content metrics across the dashboard; cache and external-operation metrics remain global and are labeled accordingly. Dolby Vision profiles and compatible HDR layers are retained in combined buckets. The dashboard also shows unique uploaded volume, duplicate prevention, an estimate of hashing I/O avoided by reused base torrents, a 52-week activity heatmap, and comparisons with the previous equal-length period. WEB items are grouped by their identified streaming service, with unidentified WEB sources shown as **Unknown**. Personal releases are compared with standard releases and include aggregate results, success rate, category, and unique volume. Operations whose payload size is not measured display an em dash instead of a misleading zero. Distribution sections show local SVG donut charts with their exact sortable tables available in an expandable area directly below each chart. A logical external operation represents one adapter action; redirects and internal retries do not create additional hits.
+
+Open the **⋯** actions menu to download the current filtered response as JSON, export the daily timeline as CSV, or reset statistics. Export runs locally in the browser and does not add another server-side data store. Tracker reliability labels are derived from the displayed success rate: they summarize aggregate outcomes and are not an uptime monitor.
+
+Statistics are daily aggregates. Upload Assistant does not store release names, paths, release-group names or tags, external media IDs, URLs, or credentials in the statistics database. Personal releases are stored only as a `personal` or `standard` aggregate. Collection begins when the feature is installed; existing cache files and logs are not scanned or backfilled, though later accesses to an existing cache count as new hits or misses.
+
+The database is stored at `data/stats.sqlite3` below the user-state directory. Collection is disabled by default; set `DEFAULT.stats_enabled` to `True` to opt in. While disabled, the dashboard is blocked and does not return or display previously collected aggregates. Stored aggregates remain intact and become visible again if collection is re-enabled. **Reset statistics** in the actions menu requires typing `RESET` and removes only statistics; it never removes cache entries, configuration, torrents, or NZBs.
+
 ## Appearance, Help, and Changelog
 
 ### Appearance
@@ -291,7 +328,7 @@ The changelog is derived from the normal Upload Assistant releases; WebUI change
 
 The same functions are reorganized for smaller screens:
 
-- Upload and Configuration are available in the compact workspace navigation.
+- Upload, Configuration, and Stats are available in the compact workspace navigation.
 - Files, Upload, and Arguments move to bottom navigation.
 - During a run, those destinations adapt to Progress, media information, Screenshots, and Description when available.
 - Help, Changelog, and Appearance open as viewport-sized dialogs with their own scrolling content.
