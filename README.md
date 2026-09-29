@@ -144,6 +144,7 @@ Sequence Usenet and torrent tracker uploads while limiting contention with qBitt
 | <img src="web_ui/static/img/trackers/hdbits.png" width="16" height="16" />                    | HDBits                 | HDBITS                 | MOVIE, TV                    |
 | <img src="web_ui/static/img/trackers/hdspace.png" width="16" height="16" />                   | HD-Space               | HDSPACE                | MOVIE, TV                    |
 | <img src="web_ui/static/img/trackers/hdtorrents.png" width="16" height="16" />                | HD-Torrents            | HDTORRENTS             | MOVIE, TV                    |
+| <img src="web_ui/static/img/trackers/hellenichd.png" width="16" height="16" />                | Hellenic-HD            | HELLENICHD             | MOVIE, TV                    |
 | <img src="web_ui/static/img/trackers/homiehelpdesk.png" width="16" height="16" />             | HomieHelpDesk          | HOMIEHELPDESK          | MOVIE, TV, BOOK, GAME, MUSIC |
 | <img src="web_ui/static/img/trackers/immortalseed.png" width="16" height="16" />              | ImmortalSeed           | IMMORTALSEED           | MOVIE, TV, BOOK, MUSIC, GAME |
 | <img src="web_ui/static/img/trackers/infinityhd.png" width="16" height="16" />                | InfinityHD             | INFINITYHD             | MOVIE, TV                    |
@@ -192,6 +193,7 @@ Sequence Usenet and torrent tracker uploads while limiting contention with qBitt
 | <img src="web_ui/static/img/trackers/theleachzone.png" width="16" height="16" />              | The Leach Zone         | THELEACHZONE           | MOVIE, TV                    |
 | <img src="web_ui/static/img/trackers/theoldschool.png" alt="" width="16" height="16" />       | The Old School         | THEOLDSCHOOL           | MOVIE, TV                    |
 | <img src="web_ui/static/img/trackers/torrenteros.png" width="16" height="16" />               | Torrenteros            | TORRENTEROS            | MOVIE, TV                    |
+| <img src="web_ui/static/img/trackers/torrenthaven.png" width="16" height="16" />              | TorrentHaven           | TORRENTHAVEN           | MOVIE, TV                    |
 | <img src="web_ui/static/img/trackers/torrenthr.png" width="16" height="16" />                 | TorrentHR              | TORRENTHR              | MOVIE, TV                    |
 | <img src="web_ui/static/img/trackers/torrentleech.png" width="16" height="16" />              | TorrentLeech           | TORRENTLEECH           | MOVIE, TV, BOOK, GAME, MUSIC |
 | <img src="web_ui/static/img/trackers/totheglory.png" width="16" height="16" />                | ToTheGlory             | TOTHEGLORY             | MOVIE, TV                    |
