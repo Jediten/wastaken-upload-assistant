@@ -598,6 +598,14 @@ class Args:
         parser.add_argument("--no-dual", dest="no_dual", action="store_true", required=False, help="Remove Dual-Audio from title")
         parser.add_argument("--no-tag", dest="no_tag", action="store_true", required=False, help="Remove Group Tag from title")
         parser.add_argument("--name", nargs=1, required=False, help="Override the generated release name (including XXX titles)", type=str, dest="manual_name")
+        parser.add_argument(
+            "--audio",
+            nargs=1,
+            required=False,
+            help="Override the detected audio codec/channels, e.g. 'DD+ 7.1' (a detected Dual-Audio/MULTI/Dubbed prefix is kept)",
+            type=str,
+            dest="manual_audio",
+        )
         parser.add_argument("--no-edition", dest="no_edition", action="store_true", required=False, help="Remove Edition from title")
         parser.add_argument("--dual-audio", dest="dual_audio", action="store_true", required=False, help="Add Dual-Audio to the title")
         parser.add_argument("-ol", "--original-language", dest="manual_language", nargs=1, required=False, help="Set original audio language")

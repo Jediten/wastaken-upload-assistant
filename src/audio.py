@@ -35,6 +35,18 @@ class AudioManager:
     ) -> tuple[str, str, bool]:
         return await _get_audio_v2(self.config, mi, meta, bdinfo)
 
+    @staticmethod
+    def apply_manual_audio(audio: str, manual_audio: str | None) -> str:
+        """Swap the detected codec/channels for the --audio value, keeping the detected language prefix."""
+        manual = " ".join(str(manual_audio or "").split())
+        if not manual:
+            return audio
+        prefixes = ("Dual-Audio", "MULTI", "Dubbed")
+        if manual.startswith(prefixes):
+            return manual
+        prefix = next((p for p in prefixes if audio.startswith(f"{p} ")), "")
+        return f"{prefix} {manual}".strip()
+
 
 def determine_channel_count(
     channels: Any,

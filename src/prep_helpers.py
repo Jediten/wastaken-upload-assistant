@@ -1501,6 +1501,7 @@ async def finalize_metadata(
         meta.container = await video_manager.get_container(meta)
 
         meta.audio, meta.channels, meta.has_commentary = await prep_instance.audio_manager.get_audio_v2(mi_data, meta, bdinfo)
+        meta.audio = prep_instance.audio_manager.apply_manual_audio(meta.audio, meta.manual_audio)
 
         meta.three_d = await video_manager.is_3d(bdinfo)
 
@@ -1704,6 +1705,7 @@ async def finalize_metadata(
 
     if meta.category == "XXX" and not meta.audio:
         meta.audio, meta.channels, meta.has_commentary = await prep_instance.audio_manager.get_audio_v2(mi_data, meta, bdinfo)
+        meta.audio = prep_instance.audio_manager.apply_manual_audio(meta.audio, meta.manual_audio)
     if meta.category == "XXX" and not meta.video_codec:
         meta.video_encode, meta.video_codec, meta.has_encode_settings, meta.bit_depth = await video_manager.get_video_encode(mi_data, meta.type, bdinfo)
 

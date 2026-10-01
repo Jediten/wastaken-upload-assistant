@@ -545,6 +545,7 @@ let argumentCategories = [
         label: "--name",
         placeholder: "RELEASE_NAME",
       },
+      { label: "--audio", placeholder: "DD+ 7.1" },
       { label: "--no-season" },
       { label: "--no-year" },
       { label: "--no-aka" },

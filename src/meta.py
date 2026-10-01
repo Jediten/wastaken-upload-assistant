@@ -280,6 +280,7 @@ class Meta:
     mal_manual: str | int | None = None
     mal: int | None = None
     manga: bool = False
+    manual_audio: str | None = None
     manual_category: str | None = None
     manual_commentary: bool = False
     manual_data: str | None = None

@@ -130,6 +130,7 @@ Note: if a manual TMDb or IMDb id is present in the incoming `meta` before parsi
 ### Tags / edition / language
 
 - `--name RELEASE_NAME`: Override the generated release name, including XXX release titles.
+- `--audio "CODEC CHANNELS"`: Override the detected audio codec/channels, e.g. `--audio "DD+ 7.1"` to drop a `DD+ EX 7.1` tag. A detected `Dual-Audio`/`MULTI`/`Dubbed` prefix is kept unless the value starts with one itself.
 - `--cast NAME[,NAME...]`: Override cast or XXX performers with a comma-separated list. This takes priority over detected metadata.
 - `-pub`, `--publisher NAME`: Override the book/audiobook or game publisher, or XXX studio.
 - `-g`, `--tag [GROUP ...]`: Group tag.
