@@ -400,6 +400,7 @@ class Args:
 
         imghost_completer = make_dict_completer(
             {
+                "catbox": "Catbox",
                 "imgbb": "ImgBB",
                 "imgbox": "Imgbox",
                 "pixhost": "Pixhost",
@@ -843,6 +844,7 @@ class Args:
             required=False,
             help="Image Host",
             choices=[
+                "catbox",
                 "imgbb",
                 "imgbox",
                 "pixhost",

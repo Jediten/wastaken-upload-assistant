@@ -1716,7 +1716,7 @@ function AudionutsUAGUI() {
     useState(false);
   const [failedFavicons, setFailedFavicons] = useState(new Set());
   const [isExecuting, setIsExecuting] = useState(false);
-  const [isOutputExpanded, setIsOutputExpanded] = useState(false);
+  const [isTerminalView, setIsTerminalView] = useState(false);
   const [expandedFolders, setExpandedFolders] = useState(
     getStoredExpandedFolders,
   );
@@ -2164,7 +2164,9 @@ function AudionutsUAGUI() {
     useState(null);
   const [fileBrowserSearchLoading, setFileBrowserSearchLoading] =
     useState(false);
+  const [fileBrowserRefreshing, setFileBrowserRefreshing] = useState(false);
   const fileBrowserSearchTimer = useRef(null);
+  const fileBrowserSearchCompletion = useRef(null);
   const fileBrowserSearchQuery = useRef("");
   const fileBrowserSearchId = useRef(0);
 
@@ -2905,7 +2907,7 @@ function AudionutsUAGUI() {
           </div>
         )}
         <div
-          className={`ua-tracker-chip-list grid gap-2 pr-1 ${!isExecuting && !isOutputExpanded ? "" : "max-h-48 overflow-y-auto"}`}
+          className={`ua-tracker-chip-list grid gap-2 pr-1 ${!isExecuting && !isTerminalView ? "" : "max-h-48 overflow-y-auto"}`}
         >
           {visibleTrackers.length === 0 && (
             <span className="text-xs opacity-70">
@@ -3296,11 +3298,9 @@ function AudionutsUAGUI() {
     if (container) {
       const wrapper = createUploadOutputFragment((rawHtml || "").trim());
       container.appendChild(wrapper);
-      // Use scrollIntoView to avoid clipping of the last line
+      // Scroll only the terminal, including while its view is hidden.
       setTimeout(() => {
-        const last = container.lastElementChild;
-        if (last && last.scrollIntoView) last.scrollIntoView({ block: "end" });
-        else container.scrollTop = container.scrollHeight;
+        container.scrollTop = container.scrollHeight;
       }, 0);
     }
   };
@@ -3318,9 +3318,7 @@ function AudionutsUAGUI() {
     rootContainer.appendChild(el);
     // ensure fully visible
     setTimeout(() => {
-      const last = rootContainer.lastElementChild;
-      if (last && last.scrollIntoView) last.scrollIntoView({ block: "end" });
-      else rootContainer.scrollTop = rootContainer.scrollHeight;
+      rootContainer.scrollTop = rootContainer.scrollHeight;
     }, 0);
   };
 
@@ -3374,6 +3372,21 @@ function AudionutsUAGUI() {
       console.error("Failed to load browse roots:", error);
     } finally {
       setFileBrowserRestoring(false);
+    }
+  };
+
+  /** Reload visible file-browser data without resetting navigation state. */
+  const refreshFileBrowser = async () => {
+    if (fileBrowserRefreshing) return;
+    setFileBrowserRefreshing(true);
+    try {
+      setFileBrowserRestoring(true);
+      await loadBrowseRoots();
+      if (fileBrowserSearchQuery.current) {
+        await handleFileBrowserSearch(fileBrowserSearchQuery.current);
+      }
+    } finally {
+      setFileBrowserRefreshing(false);
     }
   };
 
@@ -3461,7 +3474,7 @@ function AudionutsUAGUI() {
 
   useEffect(() => {
     if (isExecuting) {
-      setIsOutputExpanded(true);
+      setIsTerminalView(true);
     }
   }, [isExecuting]);
 
@@ -3539,6 +3552,8 @@ function AudionutsUAGUI() {
       if (fileBrowserSearchTimer.current) {
         clearTimeout(fileBrowserSearchTimer.current);
       }
+      fileBrowserSearchCompletion.current?.();
+      fileBrowserSearchCompletion.current = null;
     };
   }, []);
 
@@ -4080,68 +4095,88 @@ function AudionutsUAGUI() {
 
   // File Browser search
   const handleFileBrowserSearch = (value, signal) => {
-    if (signal?.aborted) return;
-    const searchId = ++fileBrowserSearchId.current;
-    setFileBrowserSearch(value);
-    const searchQuery = value.trim();
-    fileBrowserSearchQuery.current = searchQuery;
+    if (signal?.aborted) return Promise.resolve();
+    fileBrowserSearchCompletion.current?.();
     if (fileBrowserSearchTimer.current) {
       clearTimeout(fileBrowserSearchTimer.current);
     }
-    if (!searchQuery) {
-      setFileBrowserSearchResults(null);
-      setFileBrowserSearchLoading(false);
-      return;
-    }
-    setFileBrowserSearchLoading(true);
-    const onAbort = () => {
-      if (fileBrowserSearchId.current === searchId) {
-        clearTimeout(fileBrowserSearchTimer.current);
+    return new Promise((resolve) => {
+      const searchId = ++fileBrowserSearchId.current;
+      let settled = false;
+      const settle = () => {
+        if (settled) return;
+        settled = true;
+        if (fileBrowserSearchCompletion.current === settle) {
+          fileBrowserSearchCompletion.current = null;
+        }
+        resolve();
+      };
+      fileBrowserSearchCompletion.current = settle;
+      setFileBrowserSearch(value);
+      const searchQuery = value.trim();
+      fileBrowserSearchQuery.current = searchQuery;
+      if (!searchQuery) {
+        setFileBrowserSearchResults(null);
         setFileBrowserSearchLoading(false);
+        settle();
+        return;
       }
-    };
-    signal?.addEventListener("abort", onAbort, { once: true });
-    fileBrowserSearchTimer.current = setTimeout(async () => {
-      if (signal?.aborted) return;
-      try {
-        const response = await apiFetch(
-          `${API_BASE}/browse_search?q=${encodeURIComponent(searchQuery)}`,
-          { signal },
-        );
-        if (signal?.aborted) return;
-        if (!response.ok) {
-          throw new Error(`Search request failed (${response.status})`);
-        }
-        const data = await response.json();
-        if (signal?.aborted) return;
-        // Early return if the search has changed since this request
-        if (fileBrowserSearchId.current !== searchId) return;
-        if (data.success) {
-          setFileBrowserSearchResults(data);
-        } else {
-          setFileBrowserSearchResults({
-            items: [],
-            query: searchQuery,
-            count: 0,
-          });
-        }
-      } catch (error) {
-        if (signal?.aborted) return;
-        console.error("File browser search failed:", error);
+      setFileBrowserSearchLoading(true);
+      const onAbort = () => {
         if (fileBrowserSearchId.current === searchId) {
-          setFileBrowserSearchResults({
-            items: [],
-            query: searchQuery,
-            count: 0,
-          });
-        }
-      } finally {
-        signal?.removeEventListener("abort", onAbort);
-        if (!signal?.aborted && fileBrowserSearchId.current === searchId) {
+          clearTimeout(fileBrowserSearchTimer.current);
           setFileBrowserSearchLoading(false);
         }
-      }
-    }, 300); //300ms debounce so we dont spam requests for every keystroke
+        signal?.removeEventListener("abort", onAbort);
+        settle();
+      };
+      signal?.addEventListener("abort", onAbort, { once: true });
+      fileBrowserSearchTimer.current = setTimeout(async () => {
+        if (signal?.aborted) {
+          settle();
+          return;
+        }
+        try {
+          const response = await apiFetch(
+            `${API_BASE}/browse_search?q=${encodeURIComponent(searchQuery)}`,
+            { signal },
+          );
+          if (signal?.aborted) return;
+          if (!response.ok) {
+            throw new Error(`Search request failed (${response.status})`);
+          }
+          const data = await response.json();
+          if (signal?.aborted) return;
+          // Early return if the search has changed since this request
+          if (fileBrowserSearchId.current !== searchId) return;
+          if (data.success) {
+            setFileBrowserSearchResults(data);
+          } else {
+            setFileBrowserSearchResults({
+              items: [],
+              query: searchQuery,
+              count: 0,
+            });
+          }
+        } catch (error) {
+          if (signal?.aborted) return;
+          console.error("File browser search failed:", error);
+          if (fileBrowserSearchId.current === searchId) {
+            setFileBrowserSearchResults({
+              items: [],
+              query: searchQuery,
+              count: 0,
+            });
+          }
+        } finally {
+          signal?.removeEventListener("abort", onAbort);
+          if (!signal?.aborted && fileBrowserSearchId.current === searchId) {
+            setFileBrowserSearchLoading(false);
+          }
+          settle();
+        }
+      }, 300); //300ms debounce so we dont spam requests for every keystroke
+    });
   };
 
   const refreshFileBrowserAfterUpload = async (signal) => {
@@ -4665,11 +4700,7 @@ function AudionutsUAGUI() {
                   const wrapper = createUploadOutputFragment(clean);
                   if (rootContainer) rootContainer.appendChild(wrapper);
                   setTimeout(() => {
-                    const last =
-                      rootContainer && rootContainer.lastElementChild;
-                    if (last && last.scrollIntoView)
-                      last.scrollIntoView({ block: "end" });
-                    else if (rootContainer)
+                    if (rootContainer)
                       rootContainer.scrollTop = rootContainer.scrollHeight;
                   }, 0);
                 }
@@ -6132,12 +6163,27 @@ function AudionutsUAGUI() {
             ) : (
               <div className="flex flex-col h-full">
                 <div className="ua-upload-panel-header p-3 border-b flex-shrink-0">
-                  <h2
-                    className={`text-base font-bold ${isDarkMode ? "text-white" : "text-gray-800"} flex items-center gap-2`}
-                  >
-                    <FolderIcon />
-                    File Browser
-                  </h2>
+                  <div className="flex items-center justify-between gap-2">
+                    <h2
+                      className={`text-base font-bold ${isDarkMode ? "text-white" : "text-gray-800"} flex items-center gap-2`}
+                    >
+                      <FolderIcon />
+                      File Browser
+                    </h2>
+                    <button
+                      type="button"
+                      onClick={refreshFileBrowser}
+                      disabled={fileBrowserRefreshing}
+                      aria-label="Refresh file browser"
+                      title="Refresh file browser"
+                      className={`rounded p-1.5 transition-colors disabled:cursor-wait disabled:opacity-60 ${isDarkMode ? "text-gray-400 hover:bg-gray-700 hover:text-gray-200" : "text-gray-500 hover:bg-gray-200 hover:text-gray-700"}`}
+                    >
+                      <LucideIcon
+                        name="refresh-cw"
+                        className={`h-4 w-4 ${fileBrowserRefreshing ? "animate-spin" : ""}`}
+                      />
+                    </button>
+                  </div>
                   <div className="relative mt-2">
                     <input
                       type="text"
@@ -6301,9 +6347,9 @@ function AudionutsUAGUI() {
             className={`flex flex-col h-full ${activePanel === "main" ? "" : "hidden"}`}
           >
             {/* Top controls */}
-            {!isExecuting && (
+            {!isExecuting && !isTerminalView && (
               <div
-                className={`p-3 space-y-3 border-b ${!isOutputExpanded ? "flex-1 overflow-y-auto" : "flex-shrink-0"} ${isDarkMode ? "bg-gray-800 border-gray-700" : "bg-white border-gray-200"}`}
+                className={`p-3 space-y-3 border-b flex-1 min-h-0 overflow-y-auto ${isDarkMode ? "bg-gray-800 border-gray-700" : "bg-white border-gray-200"}`}
               >
                 {renderSelectedPathOrQueue(true)}
 
@@ -6415,10 +6461,10 @@ function AudionutsUAGUI() {
 
             {/* Terminal output */}
             <div
-              className={`${isExecuting || isOutputExpanded ? "flex-1 p-3" : "flex-none p-2"} flex flex-col min-h-0 overflow-hidden ${isDarkMode ? "bg-gray-900" : "bg-gray-100"}`}
+              className={`${isExecuting || isTerminalView ? "flex-1 p-3" : "flex-none p-2"} flex flex-col min-h-0 overflow-hidden ${isDarkMode ? "bg-gray-900" : "bg-gray-100"}`}
             >
               <div
-                className={`flex items-center gap-2 ${isExecuting || isOutputExpanded ? "mb-2" : ""} flex-shrink-0`}
+                className={`flex items-center gap-2 ${isExecuting || isTerminalView ? "mb-2" : ""} flex-shrink-0`}
               >
                 <span className={isDarkMode ? "text-white" : "text-gray-800"}>
                   <TerminalIcon />
@@ -6447,30 +6493,30 @@ function AudionutsUAGUI() {
                 )}
                 {!isExecuting && (
                   <button
-                    onClick={() => setIsOutputExpanded((expanded) => !expanded)}
-                    aria-expanded={isOutputExpanded}
+                    onClick={() => setIsTerminalView((expanded) => !expanded)}
+                    aria-expanded={isTerminalView}
                     title={
-                      isOutputExpanded ? "Collapse output" : "Expand output"
+                      isTerminalView ? "Back to preparation" : "View terminal"
                     }
                     className={`ml-auto flex items-center gap-1 rounded px-2 py-1 text-xs ${isDarkMode ? "text-gray-300 hover:bg-gray-700" : "text-gray-600 hover:bg-gray-200"}`}
                   >
-                    <span
-                      className={`transition-transform ${isOutputExpanded ? "" : "rotate-180"}`}
-                    >
-                      <ChevronDownIcon />
-                    </span>
-                    {isOutputExpanded ? "Collapse" : "Expand"}
+                    {isTerminalView ? (
+                      <LucideIcon name="arrow-left" className="h-4 w-4" />
+                    ) : (
+                      <TerminalIcon />
+                    )}
+                    {isTerminalView ? "Back to preparation" : "View terminal"}
                   </button>
                 )}
               </div>
               <div
                 ref={richOutputRef}
                 id="rich-output"
-                className={`rounded-lg overflow-auto p-2 border text-sm bg-black border-gray-700 text-white ${isExecuting || isOutputExpanded ? "flex-1" : "hidden"}`}
+                className={`min-h-0 rounded-lg overflow-auto p-2 border text-sm bg-black border-gray-700 text-white ${isExecuting || isTerminalView ? "flex-1" : "hidden"}`}
               ></div>
               {isExecuting && (
                 <div
-                  className={`mt-2 flex gap-2 ${isAwaitingTerminalInput ? "animate-pulse" : ""}`}
+                  className={`mt-2 flex shrink-0 gap-2 ${isAwaitingTerminalInput ? "animate-pulse" : ""}`}
                 >
                   {isYesNoPrompt && (
                     <>
@@ -6501,7 +6547,7 @@ function AudionutsUAGUI() {
                       }
                     }}
                     placeholder="Type input and press Enter"
-                    className={`flex-1 px-3 py-2 text-sm rounded-lg border transition-shadow ${isDarkMode ? "bg-gray-700 text-white" : "bg-white text-gray-900"} ${isAwaitingTerminalInput ? (isDarkMode ? "border-amber-400 shadow-[0_0_0_2px_rgba(251,191,36,0.18)]" : "border-amber-500 shadow-[0_0_0_2px_rgba(245,158,11,0.18)]") : isDarkMode ? "border-gray-600" : "border-gray-300"}`}
+                    className={`min-w-0 flex-1 px-3 py-2 text-sm rounded-lg border transition-shadow ${isDarkMode ? "bg-gray-700 text-white" : "bg-white text-gray-900"} ${isAwaitingTerminalInput ? (isDarkMode ? "border-amber-400 shadow-[0_0_0_2px_rgba(251,191,36,0.18)]" : "border-amber-500 shadow-[0_0_0_2px_rgba(245,158,11,0.18)]") : isDarkMode ? "border-gray-600" : "border-gray-300"}`}
                   />
                   <button
                     onClick={() => sendInput(sessionId, userInput)}
@@ -6858,12 +6904,27 @@ function AudionutsUAGUI() {
             ) : (
               <>
                 <div className="ua-upload-panel-header p-4 border-b">
-                  <h2
-                    className={`text-lg font-bold ${isDarkMode ? "text-white" : "text-gray-800"} flex items-center gap-2`}
-                  >
-                    <FolderIcon />
-                    File Browser
-                  </h2>
+                  <div className="flex items-center justify-between gap-2">
+                    <h2
+                      className={`text-lg font-bold ${isDarkMode ? "text-white" : "text-gray-800"} flex items-center gap-2`}
+                    >
+                      <FolderIcon />
+                      File Browser
+                    </h2>
+                    <button
+                      type="button"
+                      onClick={refreshFileBrowser}
+                      disabled={fileBrowserRefreshing}
+                      aria-label="Refresh file browser"
+                      title="Refresh file browser"
+                      className={`rounded p-1.5 transition-colors disabled:cursor-wait disabled:opacity-60 ${isDarkMode ? "text-gray-400 hover:bg-gray-700 hover:text-gray-200" : "text-gray-500 hover:bg-gray-200 hover:text-gray-700"}`}
+                    >
+                      <LucideIcon
+                        name="refresh-cw"
+                        className={`h-4 w-4 ${fileBrowserRefreshing ? "animate-spin" : ""}`}
+                      />
+                    </button>
+                  </div>
                   <div className="relative mt-2">
                     <input
                       type="text"
@@ -7074,7 +7135,7 @@ function AudionutsUAGUI() {
           <div className="relative flex-1 flex flex-col min-w-0 overflow-hidden">
             {/* Top Panel */}
             <div
-              className={`ua-upload-workspace-main ${isDarkMode ? "bg-gray-800 border-gray-700" : "bg-white border-gray-200"} border-b ${isExecuting ? "p-3" : "p-4"} ${!isExecuting && !isOutputExpanded ? "flex-1 overflow-y-auto" : "flex-shrink-0"}`}
+              className={`ua-upload-workspace-main ${isDarkMode ? "bg-gray-800 border-gray-700" : "bg-white border-gray-200"} border-b ${isExecuting ? "p-3" : "p-4"} ${isExecuting ? "flex-shrink-0" : isTerminalView ? "hidden" : "flex-1 min-h-0 overflow-y-auto"}`}
             >
               <div
                 className={`${isExecuting ? "w-full" : "mx-auto max-w-6xl"} space-y-4`}
@@ -7286,18 +7347,18 @@ function AudionutsUAGUI() {
 
             {/* Execution Output */}
             <div
-              className={`ua-upload-output-panel ${isExecuting || isOutputExpanded ? "flex-1 p-4" : "flex-none p-2"} ${isDarkMode ? "bg-gray-900" : "bg-gray-100"} flex flex-col min-h-0 overflow-hidden`}
+              className={`ua-upload-output-panel ${isExecuting || isTerminalView ? "flex-1 p-4" : "flex-none p-2"} ${isDarkMode ? "bg-gray-900" : "bg-gray-100"} flex flex-col min-h-0 overflow-hidden`}
               style={
-                isExecuting || isOutputExpanded
+                isExecuting || isTerminalView
                   ? undefined
                   : { flex: "0 0 auto", minHeight: 0 }
               }
             >
               <div
-                className={`max-w-6xl mx-auto w-full ${isExecuting || isOutputExpanded ? "flex-1" : "flex-none"} flex flex-col min-h-0`}
+                className={`max-w-6xl mx-auto w-full ${isExecuting || isTerminalView ? "flex-1" : "flex-none"} flex flex-col min-h-0`}
               >
                 <div
-                  className={`flex items-center gap-2 ${isExecuting || isOutputExpanded ? "mb-3" : ""} flex-shrink-0`}
+                  className={`flex items-center gap-2 ${isExecuting || isTerminalView ? "mb-3" : ""} flex-shrink-0`}
                 >
                   <span className={isDarkMode ? "text-white" : "text-gray-800"}>
                     <TerminalIcon />
@@ -7315,21 +7376,19 @@ function AudionutsUAGUI() {
                   )}
                   {!isExecuting && (
                     <button
-                      onClick={() =>
-                        setIsOutputExpanded((expanded) => !expanded)
-                      }
-                      aria-expanded={isOutputExpanded}
+                      onClick={() => setIsTerminalView((expanded) => !expanded)}
+                      aria-expanded={isTerminalView}
                       title={
-                        isOutputExpanded ? "Collapse output" : "Expand output"
+                        isTerminalView ? "Back to preparation" : "View terminal"
                       }
                       className={`ml-auto flex items-center gap-1.5 rounded px-3 py-1.5 text-sm ${isDarkMode ? "text-gray-300 hover:bg-gray-800" : "text-gray-600 hover:bg-gray-200"}`}
                     >
-                      <span
-                        className={`transition-transform ${isOutputExpanded ? "" : "rotate-180"}`}
-                      >
-                        <ChevronDownIcon />
-                      </span>
-                      {isOutputExpanded ? "Collapse" : "Expand"}
+                      {isTerminalView ? (
+                        <LucideIcon name="arrow-left" className="h-4 w-4" />
+                      ) : (
+                        <TerminalIcon />
+                      )}
+                      {isTerminalView ? "Back to preparation" : "View terminal"}
                     </button>
                   )}
                 </div>
@@ -7337,11 +7396,11 @@ function AudionutsUAGUI() {
                 <div
                   ref={richOutputRef}
                   id="rich-output"
-                  className={`rounded-lg overflow-auto p-3 border bg-black border-gray-700 text-white ${isExecuting || isOutputExpanded ? "flex-1" : "hidden"}`}
+                  className={`min-h-0 rounded-lg overflow-auto p-3 border bg-black border-gray-700 text-white ${isExecuting || isTerminalView ? "flex-1" : "hidden"}`}
                 ></div>
                 {isExecuting && (
                   <div
-                    className={`mt-2 flex gap-2 ${isAwaitingTerminalInput ? "animate-pulse" : ""}`}
+                    className={`mt-2 flex shrink-0 gap-2 ${isAwaitingTerminalInput ? "animate-pulse" : ""}`}
                   >
                     {isYesNoPrompt && (
                       <>
@@ -7372,7 +7431,7 @@ function AudionutsUAGUI() {
                         }
                       }}
                       placeholder="Type input and press Enter"
-                      className={`flex-1 px-3 py-2 rounded-lg border transition-shadow ${isDarkMode ? "bg-gray-700 text-white" : "bg-white text-gray-900"} ${isAwaitingTerminalInput ? (isDarkMode ? "border-amber-400 shadow-[0_0_0_2px_rgba(251,191,36,0.18)]" : "border-amber-500 shadow-[0_0_0_2px_rgba(245,158,11,0.18)]") : isDarkMode ? "border-gray-600" : "border-gray-300"}`}
+                      className={`min-w-0 flex-1 px-3 py-2 rounded-lg border transition-shadow ${isDarkMode ? "bg-gray-700 text-white" : "bg-white text-gray-900"} ${isAwaitingTerminalInput ? (isDarkMode ? "border-amber-400 shadow-[0_0_0_2px_rgba(251,191,36,0.18)]" : "border-amber-500 shadow-[0_0_0_2px_rgba(245,158,11,0.18)]") : isDarkMode ? "border-gray-600" : "border-gray-300"}`}
                     />
                     <button
                       onClick={() => sendInput(sessionId, userInput)}
