@@ -84,7 +84,7 @@ class TorrentLeech:
             audio_spectrogram=process_screenshot,
             menu_screenshots=process_screenshot,
             screenshots=process_screenshot,
-            signature=f"""<div style="text-align: right; font-size: 11px;"><a href="https://github.com/wastaken7/Upload-Assistant">{meta.ua_signature}</a></div>""",
+            signature=f"""<div style="text-align: right; font-size: 11px;"><a href="https://github.com/Jediten/wastaken-upload-assistant">{meta.ua_signature}</a></div>""",
         )
 
     def get_category(self, meta: Meta) -> int:

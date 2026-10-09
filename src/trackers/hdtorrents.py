@@ -148,7 +148,7 @@ class HDTorrents:
             book=False,
             game=False,
             nfo=False,
-            signature=f"[right][url=https://github.com/wastaken7/Upload-Assistant][size=1]{meta.ua_signature}[/size][/url][/right]",
+            signature=f"[right][url=https://github.com/Jediten/wastaken-upload-assistant][size=1]{meta.ua_signature}[/size][/url][/right]",
         )
 
     async def get_additional_checks(self, meta: Meta) -> bool:

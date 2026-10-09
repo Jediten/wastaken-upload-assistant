@@ -310,7 +310,7 @@ class GreatPosterWall:
             logo=False,
             mediainfo=False,
             tv_info=False,
-            signature=f"[align=right][url=https://github.com/wastaken7/Upload-Assistant][size=1]{meta.ua_signature}[/size][/url][/align]",
+            signature=f"[align=right][url=https://github.com/Jediten/wastaken-upload-assistant][size=1]{meta.ua_signature}[/size][/url][/align]",
         )
 
     def get_trailer(self, meta: Meta) -> str:

@@ -252,7 +252,7 @@ class MTeam:
             mediainfo=False,
             nfo=False,
             tv_info=False,
-            signature=f"[{meta.ua_signature}](https://github.com/wastaken7/Upload-Assistant)",
+            signature=f"[{meta.ua_signature}](https://github.com/Jediten/wastaken-upload-assistant)",
         )
 
         from src.bbcode import BBCODE

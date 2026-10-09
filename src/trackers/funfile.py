@@ -188,7 +188,7 @@ class FunFile:
             custom_signature=False,
             game=False,
             nfo=False,
-            signature=f"[url=https://github.com/wastaken7/Upload-Assistant][center][size=1]{meta.ua_signature}[/size][/center][/url]",
+            signature=f"[url=https://github.com/Jediten/wastaken-upload-assistant][center][size=1]{meta.ua_signature}[/size][/center][/url]",
         )
 
     def get_type_id(self, meta: Meta) -> str:

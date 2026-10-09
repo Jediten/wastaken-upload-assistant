@@ -50,7 +50,7 @@ class ImmortalSeed:
             meta,
             logo=False,
             nfo=False,
-            signature=f"\n{meta.ua_signature} (https://github.com/wastaken7/Upload-Assistant)",
+            signature=f"\n{meta.ua_signature} (https://github.com/Jediten/wastaken-upload-assistant)",
         )
 
     async def search_existing(self, meta: Meta) -> list[dict[str, str | None]]:
