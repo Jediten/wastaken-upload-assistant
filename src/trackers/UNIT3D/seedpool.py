@@ -192,9 +192,7 @@ class Seedpool(UNIT3D):
         elif bool(meta.is_disc):
             name = meta.name.replace(" ", ".")
         else:
-            base_name = meta.name.replace(" ", ".")
-            uuid_name = meta.basename_no_ext.replace(" ", ".")
-            name = base_name if meta.mal_id or 0 != 0 else uuid_name
+            name = meta.basename_no_ext.replace(" ", ".")
         p = Path(name)
         base, ext = p.stem, p.suffix
         if ext.lower() in known_extensions:
