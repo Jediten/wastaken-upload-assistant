@@ -1902,6 +1902,8 @@ def _webui_subprocess_env() -> dict[str, str]:
     env["UA_WEBUI_FORCE_COLOR"] = "1"
     env["UA_WEBUI_PROGRESS_STDOUT"] = "1"
     env["UA_WEBUI_PROMPT_SOUND_STDOUT"] = "1"
+    # The child has no terminal: description edits go to the Description panel.
+    env["UA_WEBUI_ACTIVE"] = "1"
     env["UA_STATS_SOURCE"] = "webui"
     return env
 

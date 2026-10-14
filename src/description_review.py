@@ -2,10 +2,15 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 from pathlib import Path
 from typing import Any
+
+import click
+
+from src.console import logger
 
 _REVIEW_FILE = "description_review.json"
 
@@ -63,6 +68,42 @@ def draft(meta: dict[str, Any], temp_dir: Path) -> tuple[str, int]:
         return override, 0
     items = source_items(meta)
     return (items[0]["content"] if items else ""), 0
+
+
+def webui_review_active() -> bool:
+    """Return whether this run is a WebUI child, which edits through the Description panel."""
+    return os.environ.get("UA_WEBUI_ACTIVE") == "1"
+
+
+def stage_draft(meta: Any, content: str, *, keep_existing: bool = False) -> None:
+    """Load ``content`` into the WebUI Description panel as the next draft version."""
+    temp_dir = Path(meta.base_dir) / "tmp" / meta.uuid
+    review = load_review(temp_dir)
+    if keep_existing and isinstance(review.get("content"), str):
+        return
+    try:
+        version = int(review.get("version", 0) or 0) + 1
+    except TypeError, ValueError:
+        version = 1
+    save_review(temp_dir, content, version)
+
+
+async def edit_description(meta: Any, text: str, source: str) -> str | None:
+    """Let the user edit a grabbed description; ``None`` means keep ``text`` unchanged.
+
+    WebUI runs have no terminal, so the text goes to the Description panel instead
+    of an editor. A terminal editor that cannot start never aborts the upload.
+    """
+    if webui_review_active():
+        await asyncio.to_thread(stage_draft, meta, text)
+        logger.info(f"[cyan]Description from {source} loaded into the Description panel; edit it there before confirming the upload.[/cyan]")
+        return None
+    try:
+        edited = await asyncio.to_thread(click.edit, text)
+    except (click.ClickException, OSError) as error:
+        logger.warning(f"[yellow]Could not open an editor ({error}); keeping the {source} description unchanged.[/yellow]")
+        return None
+    return None if edited is None else str(edited)
 
 
 def apply_saved_draft(meta: Any) -> None:

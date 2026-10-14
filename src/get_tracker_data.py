@@ -2,7 +2,6 @@
 import asyncio
 import contextlib
 import json
-import os
 import shutil
 import time
 import uuid
@@ -13,12 +12,12 @@ from typing import Any, cast
 from urllib.parse import urlparse
 
 import cli_ui
-import click
 import httpx
 import requests
 
 from src.btnid import BtnIdManager
 from src.console import logger, prompt_in_thread
+from src.description_review import edit_description, stage_draft, webui_review_active
 from src.meta import Meta
 from src.metadata_cache import is_cache_miss, tracker_metadata_cache_for
 from src.tracker_descriptions import description_fingerprint
@@ -214,23 +213,16 @@ class TrackerDataManager:
         """Allow an interactive run to edit the selected tracker description."""
         if meta.unattended or not candidate.description:
             return
-        if os.environ.get("UA_WEBUI_ACTIVE"):
-            from src.description_review import load_review, save_review
-
-            temp_dir = Path(meta.base_dir) / "tmp" / meta.uuid
-            review = load_review(temp_dir)
-            if not isinstance(review.get("content"), str):
-                try:
-                    version = int(review.get("version", 0) or 0) + 1
-                except TypeError, ValueError:
-                    version = 1
-                await asyncio.to_thread(save_review, temp_dir, candidate.description, version)
+        if webui_review_active():
+            # Keep a draft the user already edited when another tracker is searched later.
+            await asyncio.to_thread(stage_draft, meta, candidate.description, keep_existing=True)
+            logger.info(f"[cyan]Description from {tracker_name} loaded into the Description panel; edit it there before confirming the upload.[/cyan]")
             return
         logger.info(f"Selected description from {tracker_name}:\n{candidate.description[:1000]}", extra={"markup": False})
         choice = await prompt_in_thread(cli_ui.ask_string, "\nEnter 'e' to edit, 'd' to discard the description, or press Enter to keep it: ")
         choice = (choice or "").strip().lower()
         if choice == "e":
-            edited = await asyncio.to_thread(click.edit, candidate.description)
+            edited = await edit_description(meta, candidate.description, tracker_name)
             if edited is not None:
                 candidate.description = str(edited).strip()
                 candidate.saved_description = bool(candidate.description)

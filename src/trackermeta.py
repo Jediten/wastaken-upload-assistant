@@ -9,13 +9,13 @@ from typing import Any, cast
 from urllib.parse import urlparse
 
 import cli_ui
-import click
 import httpx
 from PIL import Image
 
 from src.bbcode import BBCODE
 from src.btnid import BtnIdManager
 from src.console import buffer_console_logs, logger
+from src.description_review import edit_description
 from src.meta import Meta
 from src.temp_paths import screenshots_dir
 from src.tracker_descriptions import DescriptionCandidate, add_candidate, description_fingerprint, resolve_description_mode, score_release_name
@@ -483,13 +483,12 @@ async def update_metadata_from_tracker(
                             edit_choice = cli_ui.ask_string("Enter 'e' to edit, 'd' to discard, or press Enter to keep it as is: ")
 
                             if (edit_choice or "").lower() == "e":
-                                # pyrefly: ignore [bad-argument-type]
-                                edited_description = str(click.edit(text=description) or "")
+                                edited_description = await edit_description(meta, description, tracker_name)
                                 if edited_description:
                                     desc = edited_description.strip()
                                     meta.description = desc
                                     meta.saved_description = True
-                                logger.info(f"[green]Final description after editing:[/green] {meta.description}", extra={"markup": False})
+                                    logger.info(f"[green]Final description after editing:[/green] {meta.description}", extra={"markup": False})
                             elif (edit_choice or "").lower() == "d":
                                 meta.description = ""
                                 meta.image_list = []
@@ -704,13 +703,12 @@ async def update_metadata_from_tracker(
                             edit_choice = (edit_choice_raw or "").strip().lower()
 
                             if edit_choice.lower() == "e":
-                                # pyrefly: ignore [bad-argument-type]
-                                edited_description = str(click.edit(text=description) or "")
+                                edited_description = await edit_description(meta, description, tracker_name)
                                 if edited_description:
                                     description = edited_description.strip()
                                     meta.description = description
                                     meta.saved_description = True
-                                logger.info(f"[green]Final description after editing:[/green] {description}", extra={"markup": False})
+                                    logger.info(f"[green]Final description after editing:[/green] {description}", extra={"markup": False})
                             elif edit_choice.lower() == "d":
                                 meta.hdb_description = ""
                                 logger.info("[yellow]Description discarded.[/yellow]")

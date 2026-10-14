@@ -165,7 +165,7 @@ def test_webui_tracker_description_is_saved_without_prompting(tmp_path, monkeypa
         candidate = Meta({"description": "tracker text", "description_provenance": {"source": "AITHER"}})
         monkeypatch.setenv("UA_WEBUI_ACTIVE", "1")
         monkeypatch.setattr("src.get_tracker_data.cli_ui.ask_string", lambda _prompt: (_ for _ in ()).throw(AssertionError("WebUI must not prompt")))
-        monkeypatch.setattr("src.get_tracker_data.click.edit", lambda _text: (_ for _ in ()).throw(AssertionError("editor must not open")))
+        monkeypatch.setattr("src.description_review.click.edit", lambda _text: (_ for _ in ()).throw(AssertionError("editor must not open")))
 
         await manager._review_explicit_tracker_description(meta, "AITHER", candidate)
 

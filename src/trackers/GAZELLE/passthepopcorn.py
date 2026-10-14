@@ -12,7 +12,6 @@ from urllib.parse import urlparse
 
 import aiofiles
 import cli_ui
-import click
 import httpx
 from rich.markup import escape
 
@@ -20,6 +19,7 @@ from src.bbcode import BBCODE
 from src.cogs.redaction import PathAwareEncoder, Redaction
 from src.console import logger, prompt_in_thread
 from src.cookie_auth import CookieValidator
+from src.description_review import edit_description
 from src.exceptions import *  # noqa F403
 from src.exceptions import UploadError
 from src.mediainfo import MediaInfo
@@ -302,12 +302,12 @@ class PassThePopcorn:
                 edit_choice = await prompt_in_thread(cli_ui.ask_string, "Enter 'e' to edit, 'd' to discard, or press Enter to keep it as is: ")
 
                 if (edit_choice or "").lower() == "e":
-                    edited_description = cast(str | None, click.edit(cast(Any, desc)))
+                    edited_description = await edit_description(meta, desc, self.tracker)
                     if edited_description:
                         desc = edited_description.strip()
                         meta.description = desc
                         meta.saved_description = True
-                    logger.info(f"{self.tracker}: [green]Final description after editing:[/green] {escape(str(desc))}")
+                        logger.info(f"{self.tracker}: [green]Final description after editing:[/green] {escape(str(desc))}")
                 elif (edit_choice or "").lower() == "d":
                     desc = None
                     logger.info(f"{self.tracker}: [yellow]Description discarded.[/yellow]")
