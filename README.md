@@ -187,7 +187,7 @@ Sequence Usenet and torrent tracker uploads while limiting contention with qBitt
 | <img src="web_ui/static/img/trackers/samaritano.png" width="16" height="16" />                | Samaritano             | SAMARITANO             | MOVIE, TV, BOOK, GAME        |
 | <img src="web_ui/static/img/trackers/seedpool.png" width="16" height="16" />                  | seedpool               | SEEDPOOL               | MOVIE, TV, BOOK, GAME, MUSIC |
 | <img src="web_ui/static/img/trackers/shareisland.png" width="16" height="16" />               | ShareIsland            | SHAREISLAND            | MOVIE, TV                    |
-| <img src="web_ui/static/img/trackers/skipthecommercials.png" alt="" width="16" height="16" /> | SkipTheCommerials      | SKIPTHECOMMERCIALS     | MOVIE (Documentary only), TV |
+| <img src="web_ui/static/img/trackers/skipthecommercials.png" alt="" width="16" height="16" /> | SkipTheCommercials     | SKIPTHECOMMERCIALS     | MOVIE (Documentary only), TV |
 | <img src="web_ui/static/img/trackers/speedapp.png" width="16" height="16" />                  | SpeedApp               | SPEEDAPP               | MOVIE, TV, BOOK, GAME, MUSIC |
 | <img src="web_ui/static/img/trackers/swarmazon.png" width="16" height="16" />                 | Swarmazon              | SWARMAZON              | MOVIE, TV                    |
 | <img src="web_ui/static/img/trackers/theleachzone.png" width="16" height="16" />              | The Leach Zone         | THELEACHZONE           | MOVIE, TV                    |
@@ -311,6 +311,11 @@ Features automated binary managers for:
 - [par2cmdline-turbo](https://github.com/animetosho/par2cmdline-turbo)
 - [pesto](https://github.com/franzopl/pesto)
 - [7-Zip](https://www.7-zip.org/)
+
+Tracker work ported from other forks:
+
+- VietMediaF support from [bioidaika/Upload-Assistant](https://github.com/bioidaika/Upload-Assistant)
+- SkipTheCommercials rules (banned groups, English requirement, naming) from [shawnlocal/Upload-Assistant](https://github.com/shawnlocal/Upload-Assistant)
 
 <p>
   <a href="https://github.com/autobrr/mkbrr"><img src="https://github.com/autobrr/mkbrr/blob/main/.github/assets/mkbrr-dark.png?raw=true" alt="mkbrr" height="40px;"></a>&nbsp;&nbsp;
