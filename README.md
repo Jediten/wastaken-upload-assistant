@@ -201,6 +201,7 @@ Sequence Usenet and torrent tracker uploads while limiting contention with qBitt
 | <img src="web_ui/static/img/trackers/xingyungept.png" width="16" height="16" />               | XingyungePT            | XINGYUNGEPT            | MOVIE, TV                    |
 | <img src="web_ui/static/img/trackers/ulcx.png" width="16" height="16" />                      | ULCX                   | ULCX                   | MOVIE, TV                    |
 | <img src="web_ui/static/img/trackers/utopia.png" width="16" height="16" />                    | UTOPIA                 | UTOPIA                 | MOVIE, TV                    |
+| <img src="web_ui/static/img/trackers/vietmediaf.png" width="16" height="16" />                | VietMediaF             | VIETMEDIAF             | MOVIE, TV                    |
 | <img src="web_ui/static/img/trackers/yuscene.png" width="16" height="16" />                   | YUSCENE                | YUSCENE                | MOVIE, TV, BOOK, GAME, MUSIC |
 | <img src="web_ui/static/img/trackers/zenith.png" width="16" height="16" />                    | Zenith                 | ZENITH                 | MOVIE, TV, BOOK, GAME, MUSIC |
 
