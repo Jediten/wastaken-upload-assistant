@@ -6,6 +6,7 @@ import cli_ui
 
 from src.console import logger
 from src.get_desc import DescriptionBuilder
+from src.languages import languages_manager
 from src.meta import Meta
 from src.rehostimages import ImageHostPolicy, RehostImagesManager
 from src.trackers.common import Common
@@ -24,7 +25,97 @@ class SkipTheCommercials(UNIT3D):
     display_name = "SkipTheCommercials"
     allows_bloated_audio = True
     base_url = "https://skipthecommercials.xyz"
-    banned_groups = ("",)
+    banned_groups = (
+        "-ZR-",
+        "126811",
+        "4K4U",
+        "Aisha",
+        "Aisha@RFX",
+        "Alcaide_Kira",
+        "AOS",
+        "ARCADE",
+        "AV1D",
+        "aXXo",
+        "B3LLUM",
+        "BiTOR",
+        "BONE",
+        "BRrip",
+        "CM8",
+        "CREATiVE24",
+        "CrEwSaDe",
+        "CTFOH",
+        "d3g",
+        "dAV1nci",
+        "DepraveD",
+        "DNL",
+        "EGEN",
+        "eranger2",
+        "EVO",
+        "FaNGDiNG0",
+        "FGT",
+        "flower",
+        "FoxTorrentX",
+        "GalaxyTV",
+        "HD2DVD",
+        "HDHub4u",
+        "HDT",
+        "HDTime",
+        "iHYTECH",
+        "ION10",
+        "iPlanet",
+        "iVy",
+        "KaPPa",
+        "KiNGDOM",
+        "LAMA",
+        "MeGusta",
+        "mHD",
+        "mSD",
+        "NaNi",
+        "NhaNc3",
+        "nHD",
+        "nikt0",
+        "nSD",
+        "OFT",
+        "OldT",
+        "PAAI",
+        "PANDEMONiUM",
+        "PHOCiS",
+        "PiGNUS",
+        "PRODJi",
+        "PSA",
+        "R&H",
+        "RARBG",
+        "Rifftrax",
+        "SANTi",
+        "SasukeducK",
+        "seedpool",
+        "SEEDSTER",
+        "ShAaNiG",
+        "Sicario",
+        "SP3LL",
+        "SPx",
+        "STUTTERSHIT",
+        "TAoE",
+        "TEKNO3D",
+        "TGALAXY",
+        "TGx",
+        "tokar86a",
+        "TORRENTGALAXY",
+        "ToVaR",
+        "TSP",
+        "TSPxL",
+        "UnKn0wn",
+        "ViSION",
+        "VN_Foxcore",
+        "VXT",
+        "WAF",
+        "WKS",
+        "x0r",
+        "YIFY",
+        "YTS",
+        "YTS.MX",
+        "ZR",
+    )
     approved_image_hosts = ("imgbox", "imgbb", "onlyimage", "ptscreens")
     image_host_policy = ImageHostPolicy({"ibb.co": "imgbb", "imgbox.com": "imgbox", "onlyimage.org": "onlyimage", "ptscreens.com": "ptscreens"}, approved_image_hosts)
     id_url = f"{base_url}/api/torrents/"
@@ -79,7 +170,32 @@ class SkipTheCommercials(UNIT3D):
             else:
                 return False
 
-        return True
+        if not meta.valid_mi_settings:
+            logger.info(f"{self.tracker}: [bold red]No encoding settings in mediainfo, skipping {self.tracker} upload.[/bold red]")
+            return False
+
+        return meta.is_disc in ["BDMV", "DVD"] or await self.common.check_language_requirements(
+            meta, self.tracker, languages_to_check=["english"], check_audio=True, check_subtitle=True, original_language=True
+        )
+
+    async def get_name(self, meta: Meta) -> dict[str, str]:
+        stc_name = meta.name
+
+        # Non-English audio gets its language ahead of the audio codec; full discs are exempt
+        if meta.is_disc not in ["BDMV", "DVD"]:
+            if not meta.language_checked:
+                await languages_manager.process_desc_language(meta, tracker=self.tracker)
+            audio_languages: list[str] = [] if not meta.audio_languages else meta.audio_languages
+            audio = meta.audio or ""
+            if audio_languages and not await languages_manager.has_english_language(audio_languages):
+                foreign_lang = audio_languages[0].upper()
+                if audio and foreign_lang not in stc_name.upper():
+                    stc_name = stc_name.replace(audio, f"{foreign_lang} {audio}", 1)
+
+        if not str(meta.tag or "").strip("- "):
+            stc_name = f"{stc_name}-NOGROUP"
+
+        return {"name": stc_name}
 
     async def get_description(self, meta: Meta) -> dict[str, str]:
         return {
