@@ -567,7 +567,7 @@ config: dict[str, Any] = {
         # Available trackers:
         #   0DAYFILES, 1PTBA, AITHER, ALPHARATIO, ANTHELION, ASIANCINEMA, AVISTAZ, BEYONDHD, BITHDTV, BITPORN, BJSHARE, BLUTOPIA,
         #   BRASILTRACKER, BROADCASTHENET, CAPYBARABR, CATHODERAYTUBE, CINEMATIK, CINEMAZ, CURUPIRA, DARKPEERS, DESITORRENTS, DIGITALCORE,
-        #   DREADVAULT, DRUNKENSLUG, EMUWAREZ, FILELIST, FLOOD, FUNFILE, GREATPOSTERWALL, HAWKEUNO, HDBITS, HDSPACE, HDTORRENTS, HELLENICHD, HOMIEHELPDESK,
+        #   DREADVAULT, DRUNKENSLUG, ECHELONHD, EMUWAREZ, FILELIST, FLOOD, FUNFILE, GREATPOSTERWALL, HAWKEUNO, HDBITS, HDSPACE, HDTORRENTS, HELLENICHD, HOMIEHELPDESK,
         #   IMMORTALSEED, INFINITYHD, IPTORRENTS, ITATORRENTS, LAJIDUI, LASTDIGITALUNDERGROUND, LATTEAM, LEMONHD, LOCADORA, LONGPT, LST,
         #   LUMINARR, MAKINGOFF, MIDNIGHTSCENE, MTEAM, NEBULANCE, NORDICQUALITY, NZBGEEK, NZBNEST, OLDTOONSWORLD, ONLYENCODES, ORPHEUS, PASSTHEPOPCORN,
         #   PEERGARDEN, POLISHTORRENT, PORTUGAS, PRIVATEHD, PTCAFE, PTERCLUB, PTFANS, PTGTK, PTSKIT, PTZONE, QINGWA, RACING4EVERYONE, RAILGUNPT,
@@ -1291,6 +1291,16 @@ config: dict[str, Any] = {
             # Only block uploads when the existing release exactly matches files.
             "exact_match_only": False,
             "inject_delay": 0,
+        },
+        "ECHELONHD": {
+            "cli_alias": "EHD",
+            # Instead of using the tracker acronym for folder name when sym/hard linking, you can use a custom name
+            "link_dir_name": "",
+            # "use_for_search": False, set to True if using this tracker for automatic ID searching or description parsing
+            "use_for_search": False,
+            "api_key": "",
+            "announce_url": "",
+            "anon": False,
         },
         "EMUWAREZ": {
             "cli_alias": "EMUW",
