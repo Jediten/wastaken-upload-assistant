@@ -1197,7 +1197,10 @@ async def process_meta(meta: Meta, base_dir: str) -> bool:
             except ValueError as error:
                 logger.info("%s", error, extra={"markup": False})
                 continue
-        meta = edited_meta
+        if edited_meta is not meta:
+            # The WebUI parses a copy so a rejected edit can't leak in. Write the accepted edit back into
+            # the caller's object, or the caller never sees we_are_uploading and skips every upload.
+            meta.update(edited_meta)
         editargs_tracking = next_editargs
         if not meta.trackers:
             meta.trackers = previous_trackers
