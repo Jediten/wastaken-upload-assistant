@@ -72,6 +72,16 @@ class EchelonHD(UNIT3D):
             resolved = "ANIME"
         return {"category_id": category_id.get(resolved, "0")}
 
+    async def get_name(self, meta: Meta) -> dict[str, str]:
+        # Site rule: name the release the way its group named it. Use the scene or
+        # file/folder name when it carries the detected group tag; a folder the user
+        # renamed has no group name to keep, so it gets the generated name instead.
+        original = (meta.scene_name or meta.basename_no_ext or "").strip()
+        tag = (meta.tag or "").strip()
+        if original and tag and original.casefold().endswith(tag.casefold()):
+            return {"name": original}
+        return await super().get_name(meta)
+
     async def get_data(self, meta: Meta) -> dict[str, str]:
         data = await super().get_data(meta)
         return {key: value for key, value in data.items() if key in _UPLOAD_FIELDS}
