@@ -18,7 +18,7 @@ def tracker(**options) -> EchelonHD:
     [
         ({"category": "MOVIE"}, "1"),
         ({"category": "TV"}, "2"),
-        ({"category": "TV", "anime": True}, "6"),
+        ({"category": "TV", "anime": True}, "2"),
         ({"category": "MOVIE", "anime": True}, "6"),
     ],
 )

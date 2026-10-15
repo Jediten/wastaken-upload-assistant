@@ -80,7 +80,9 @@ class EchelonHD(UNIT3D):
         if reverse:
             return {v: k for k, v in category_id.items()}
         resolved = category or meta.category or ""
-        if meta.anime and resolved in ("MOVIE", "TV"):
+        # Staff, 2026-10-15: the Anime category does not take season/episode numbers
+        # yet, so anime series go under TV for now. Anime films have neither.
+        if meta.anime and resolved == "MOVIE":
             resolved = "ANIME"
         return {"category_id": category_id.get(resolved, "0")}
 
