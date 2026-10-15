@@ -1906,7 +1906,9 @@ async def match_tracker_url(tracker_urls: list[str], meta: Meta) -> None:
 
         patterns = {}
         for name, tracker_class in tracker_class_map.items():
-            urls = getattr(tracker_class, "tracker_urls", None)
+            # Fall back to the site's own address, as get_tracker_comment_hosts does, so a tracker
+            # without tracker_urls is still recognised as already being in the client.
+            urls = getattr(tracker_class, "tracker_urls", None) or ((base_url,) if (base_url := getattr(tracker_class, "base_url", "")) else None)
             if urls:
                 patterns[name.lower()] = urls
         _cached_tracker_url_patterns = patterns
