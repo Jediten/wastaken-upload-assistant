@@ -1,4 +1,5 @@
 # Upload Assistant © 2025 Audionut & wastaken7 — Licensed under UAPL v1.0
+import re
 from typing import Any
 
 from src.meta import Meta
@@ -33,6 +34,17 @@ _UPLOAD_FIELDS = frozenset(
         "personal_release",
     }
 )
+
+
+# Dots the site's names keep: audio channels (5.1, 7.1, DDP5.1) and H.264/H.265.
+# Every other dot in a group's name becomes a space, as on the site's own uploads.
+_KEPT_DOT = re.compile(r"(?<!\d)\d\.\d(?!\d)|(?<![A-Za-z0-9])H\.26[45](?!\d)", re.IGNORECASE)
+
+
+def _spaced(name: str) -> str:
+    kept = {match.start() + match.group().index(".") for match in _KEPT_DOT.finditer(name)}
+    spaced = "".join(" " if char == "." and index not in kept else char for index, char in enumerate(name))
+    return " ".join(spaced.split())
 
 
 class EchelonHD(UNIT3D):
@@ -74,12 +86,13 @@ class EchelonHD(UNIT3D):
 
     async def get_name(self, meta: Meta) -> dict[str, str]:
         # Site rule: name the release the way its group named it. Use the scene or
-        # file/folder name when it carries the detected group tag; a folder the user
-        # renamed has no group name to keep, so it gets the generated name instead.
+        # file/folder name when it carries the detected group tag, with spaces for
+        # dots; a folder the user renamed has no group name to keep, so it gets the
+        # generated name instead.
         original = (meta.scene_name or meta.basename_no_ext or "").strip()
         tag = (meta.tag or "").strip()
         if original and tag and original.casefold().endswith(tag.casefold()):
-            return {"name": original}
+            return {"name": _spaced(original)}
         return await super().get_name(meta)
 
     async def get_data(self, meta: Meta) -> dict[str, str]:

@@ -63,11 +63,19 @@ def test_upload_sends_only_the_fields_of_the_sites_own_form(monkeypatch):
     [
         (
             {"basename_no_ext": "The.Act.S01.BluRay.1080p.DTS-HD.MA.5.1.AVC.REMUX-FraMeSToR", "tag": "-FraMeSToR"},
-            "The.Act.S01.BluRay.1080p.DTS-HD.MA.5.1.AVC.REMUX-FraMeSToR",
+            "The Act S01 BluRay 1080p DTS-HD MA 5.1 AVC REMUX-FraMeSToR",
         ),
         (
             {"scene_name": "Example.Show.S01E01.720p.HDTV.x264-SCENE", "basename_no_ext": "example.show.s01e01", "tag": "-SCENE"},
-            "Example.Show.S01E01.720p.HDTV.x264-SCENE",
+            "Example Show S01E01 720p HDTV x264-SCENE",
+        ),
+        (
+            {"basename_no_ext": "American.Psycho.2000.Unrated.PROPER.BluRay.1080p.TrueHD.Atmos.7.1.AVC.HYBRID.REMUX-FraMeSToR", "tag": "-FraMeSToR"},
+            "American Psycho 2000 Unrated PROPER BluRay 1080p TrueHD Atmos 7.1 AVC HYBRID REMUX-FraMeSToR",
+        ),
+        (
+            {"basename_no_ext": "Blade.Runner.2049.2017.2160p.AMZN.WEB-DL.DDP5.1.H.265-GROUP", "tag": "-GROUP"},
+            "Blade Runner 2049 2017 2160p AMZN WEB-DL DDP5.1 H.265-GROUP",
         ),
         (
             {"basename_no_ext": "My hero Academia S02 BDREMUX", "tag": "-ZR"},
