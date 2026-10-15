@@ -7,6 +7,7 @@ from typing import Any
 from src.app_paths import STATE_DIR
 
 _TRACKER_ID_ALIASES = {
+    "0DF": "0DAYFILES",
     "ANT": "ANTHELION",
     "BHD": "BEYONDHD",
     "BLU": "BLUTOPIA",

@@ -1435,6 +1435,7 @@ const trackerNameMap = {
   XINGYUNGEPT: "XingyungePT",
   YUSCENE: "YUSCENE",
   ZENITH: "Zenith",
+  "0DAYFILES": "0DayFiles",
   "1PTBA": "1PTBA",
 };
 

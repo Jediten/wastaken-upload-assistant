@@ -64,6 +64,7 @@ class LazyTrackerDict(dict):
 
 # Static auth types to prevent loading all trackers at startup
 STATIC_AUTH_TYPES = {
+    "0DAYFILES": "unit3d_api",
     "1PTBA": "cookies",
     "AITHER": "unit3d_api",
     "ALPHARATIO": "cookies",
@@ -1417,6 +1418,7 @@ class TrackerSetup:
 
 tracker_class_map: Any = LazyTrackerDict(
     {
+        "0DAYFILES": ("src.trackers.UNIT3D.zerodayfiles", "ZeroDayFiles"),
         "1PTBA": ("src.trackers.NEXUSPHP.oneptba", "OnePTBA"),
         "AITHER": ("src.trackers.UNIT3D.aither", "Aither"),
         "ALPHARATIO": ("src.trackers.GAZELLE.alpharatio", "AlphaRatio"),

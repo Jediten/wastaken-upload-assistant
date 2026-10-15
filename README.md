@@ -313,6 +313,7 @@ uv tool install --force git+https://github.com/wastaken7/Upload-Assistant.git
 
 |                                                                                               | Site                   | Usage                  | Supported Categories         |
 | --------------------------------------------------------------------------------------------- | ---------------------- | ---------------------- | ---------------------------- |
+| <img src="web_ui/static/img/trackers/0dayfiles.png" width="16" height="16" />                 | 0DayFiles              | 0DAYFILES              | MOVIE, TV                    |
 | <img src="web_ui/static/img/trackers/1ptba.png" width="16" height="16" />                     | 1PTBA                  | 1PTBA                  | MOVIE, TV                    |
 | <img src="web_ui/static/img/trackers/aither.png" width="16" height="16" />                    | Aither                 | AITHER                 | MOVIE, TV                    |
 | <img src="web_ui/static/img/trackers/alpharatio.png" alt="" width="16" height="16" />         | AlphaRatio             | ALPHARATIO             | MOVIE, TV                    |

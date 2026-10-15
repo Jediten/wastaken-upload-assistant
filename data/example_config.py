@@ -565,7 +565,7 @@ config: dict[str, Any] = {
         # Note: Description layout settings (like screenshot grids, logos, etc.) can be overridden per-tracker.
         # See: https://github.com/wastaken7/Upload-Assistant/blob/development/docs/description-builder.md
         # Available trackers:
-        #   1PTBA, AITHER, ALPHARATIO, ANTHELION, ASIANCINEMA, AVISTAZ, BEYONDHD, BITHDTV, BITPORN, BJSHARE, BLUTOPIA,
+        #   0DAYFILES, 1PTBA, AITHER, ALPHARATIO, ANTHELION, ASIANCINEMA, AVISTAZ, BEYONDHD, BITHDTV, BITPORN, BJSHARE, BLUTOPIA,
         #   BRASILTRACKER, BROADCASTHENET, CAPYBARABR, CATHODERAYTUBE, CINEMATIK, CINEMAZ, CURUPIRA, DARKPEERS, DESITORRENTS, DIGITALCORE,
         #   DREADVAULT, DRUNKENSLUG, EMUWAREZ, FILELIST, FLOOD, FUNFILE, GREATPOSTERWALL, HAWKEUNO, HDBITS, HDSPACE, HDTORRENTS, HELLENICHD, HOMIEHELPDESK,
         #   IMMORTALSEED, INFINITYHD, IPTORRENTS, ITATORRENTS, LAJIDUI, LASTDIGITALUNDERGROUND, LATTEAM, LEMONHD, LOCADORA, LONGPT, LST,
@@ -577,6 +577,18 @@ config: dict[str, Any] = {
         # This list is validated against the tracker blocks below by the test suite.
         # Only add the trackers you want to upload to on a regular basis
         "default_trackers": "",
+        "0DAYFILES": {
+            "cli_alias": "0DF",
+            # Instead of using the tracker acronym for folder name when sym/hard linking, you can use a custom name
+            "link_dir_name": "",
+            # "use_for_search": False, set to True if using this tracker for automatic ID searching or description parsing
+            "use_for_search": False,
+            "api_key": "",
+            "announce_url": "",
+            "anon": False,
+            # Trusted uploaders only: send uploads to the moderation queue for staff review
+            "modq": False,
+        },
         "1PTBA": {
             # Alias used to select this tracker with -tk/--trackers; case-insensitive.
             "cli_alias": "1PT",
