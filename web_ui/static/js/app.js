@@ -1918,6 +1918,9 @@ function AudionutsUAGUI() {
   const [descriptionDirty, setDescriptionDirty] = useState(false);
   const descriptionDirtyRef = useRef(false);
   const descriptionVersionRef = useRef(0);
+  // Which queue item the draft belongs to. Versions restart at 0 for every
+  // release, so they can only be compared within the same item.
+  const descriptionTargetRef = useRef("");
   const descriptionEditorRef = useRef(null);
   const [descriptionAction, setDescriptionAction] = useState("");
   const [canAddExecutionScreenshot, setCanAddExecutionScreenshot] =
@@ -3213,6 +3216,7 @@ function AudionutsUAGUI() {
       setDescriptionDraft("");
       setDescriptionView("edit");
       descriptionVersionRef.current = 0;
+      descriptionTargetRef.current = "";
       setDescriptionVersion(0);
       setDescriptionDirty(false);
       setCanAddExecutionScreenshot(false);
@@ -3285,7 +3289,25 @@ function AudionutsUAGUI() {
           const polledVersion = Number.isInteger(descriptionData?.version)
             ? descriptionData.version
             : null;
+          const polledTarget =
+            typeof descriptionData?.target === "string"
+              ? descriptionData.target
+              : "";
           if (
+            !cancelled &&
+            descriptionData?.success &&
+            polledVersion !== null &&
+            polledTarget !== descriptionTargetRef.current
+          ) {
+            // The queue moved on: start over with this release's draft.
+            descriptionTargetRef.current = polledTarget;
+            descriptionVersionRef.current = polledVersion;
+            descriptionDirtyRef.current = false;
+            setExecutionDescription(descriptionData);
+            setDescriptionDraft(descriptionData.content || "");
+            setDescriptionVersion(polledVersion);
+            setDescriptionDirty(false);
+          } else if (
             !cancelled &&
             descriptionData?.success &&
             polledVersion !== null &&
@@ -5320,6 +5342,7 @@ function AudionutsUAGUI() {
           session_id: sessionId,
           content,
           version: descriptionVersion,
+          target: descriptionTargetRef.current,
         }),
       });
       const data = await response.json().catch(() => null);
@@ -5365,6 +5388,7 @@ function AudionutsUAGUI() {
             session_id: sessionId,
             source_key: sourceKey,
             version: descriptionVersion,
+            target: descriptionTargetRef.current,
           }),
         },
       );

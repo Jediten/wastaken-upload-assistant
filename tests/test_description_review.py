@@ -103,6 +103,54 @@ def test_webui_description_api_rejects_stale_save_and_reset_versions(tmp_path, m
     assert stale_reset.status_code == 409
 
 
+def test_webui_description_api_follows_the_queue_to_the_next_release(tmp_path, monkeypatch):
+    releases = {}
+    for name in ("first", "second"):
+        temp_dir = tmp_path / name
+        temp_dir.mkdir()
+        meta_file = temp_dir / "meta.json"
+        meta_file.write_text(json.dumps({"uuid": name, "description": f"{name} text"}), encoding="utf-8")
+        releases[name] = (temp_dir, meta_file)
+    current = {"name": "first"}
+
+    def resolve(_session_id):
+        temp_dir, meta_file = releases[current["name"]]
+        return temp_dir, meta_file, json.loads(meta_file.read_text(encoding="utf-8"))
+
+    monkeypatch.setattr(server, "_resolve_execution_description_review", resolve)
+    monkeypatch.setattr(server, "_webui_auth_ok", lambda: True)
+    monkeypatch.setattr(server, "_verify_csrf_header", lambda: True)
+    headers = {"Origin": "http://localhost"}
+    with server.app.test_client() as client:
+        first = client.get("/api/execution_description?session_id=session").get_json()
+        client.put(
+            "/api/execution_description",
+            json={"session_id": "session", "content": "first edit", "version": 0, "target": first["target"]},
+            headers=headers,
+        )
+        current["name"] = "second"
+        second = client.get("/api/execution_description?session_id=session").get_json()
+        late_first_edit = client.put(
+            "/api/execution_description",
+            json={"session_id": "session", "content": "first edit again", "version": 0, "target": first["target"]},
+            headers=headers,
+        )
+        second_edit = client.put(
+            "/api/execution_description",
+            json={"session_id": "session", "content": "second edit", "version": 0, "target": second["target"]},
+            headers=headers,
+        )
+
+    assert first["target"] == "first"
+    # The next release starts its own draft at version 0, so the browser must key on the target, not the version.
+    assert second == {**second, "target": "second", "content": "second text", "version": 0}
+    assert late_first_edit.status_code == 409
+    assert late_first_edit.get_json()["target"] == "second"
+    assert second_edit.status_code == 200
+    assert load_review(releases["first"][0]) == {"content": "first edit", "version": 1}
+    assert load_review(releases["second"][0]) == {"content": "second edit", "version": 1}
+
+
 def test_base_description_is_kept_in_meta_without_creating_description_file(tmp_path):
     async def run():
         meta = Meta({"base_dir": str(tmp_path), "uuid": "release", "description": "tracker text"})

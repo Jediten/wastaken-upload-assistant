@@ -2618,6 +2618,17 @@ def _resolve_execution_description_review(session_id: str) -> tuple[Path, Path, 
     return temp_dir, meta_file, dict(meta_data)
 
 
+def _description_review_target(meta_data: Mapping[str, object]) -> str:
+    """Identify which queue item a draft belongs to, so a browser can tell items apart."""
+    return _stringify_preview_value(meta_data.get("uuid")) or ""
+
+
+def _description_target_moved(payload: Mapping[str, object], meta_data: Mapping[str, object]) -> bool:
+    """True when the browser's draft was for an earlier queue item than the one now running."""
+    requested = _stringify_preview_value(payload.get("target"))
+    return bool(requested) and requested != _description_review_target(meta_data)
+
+
 def _description_review_lock(temp_dir: Path) -> threading.Lock:
     """Return the process-local mutation lock for one execution's description."""
     key = str(temp_dir.resolve())
@@ -6665,6 +6676,7 @@ def execution_description():
             "success": True,
             "content": content,
             "version": version,
+            "target": _description_review_target(meta_data),
             "sources": source_items(meta_data),
         }
     )
@@ -6701,12 +6713,21 @@ def save_execution_description():
             return jsonify({"success": False, "error": "Description is not available yet"}), 404
         temp_dir, _meta_file, meta_data = locked_resolved
         _current_content, current_version = draft(meta_data, temp_dir)
+        if _description_target_moved(payload, meta_data):
+            return jsonify(
+                {
+                    "success": False,
+                    "error": "The queue moved on to the next release before this edit was saved",
+                    "version": current_version,
+                    "target": _description_review_target(meta_data),
+                }
+            ), 409
         if requested_version != current_version:
             return jsonify({"success": False, "error": "Description changed in another browser tab", "version": current_version}), 409
 
         next_version = current_version + 1
         save_review(temp_dir, content, next_version)
-    return jsonify({"success": True, "content": content, "version": next_version})
+    return jsonify({"success": True, "content": content, "version": next_version, "target": _description_review_target(meta_data)})
 
 
 @app.route("/api/execution_description/reset", methods=["POST"])
@@ -6737,12 +6758,21 @@ def reset_execution_description():
             return jsonify({"success": False, "error": "Description source was not found"}), 404
         content = source["content"]
         _current_content, current_version = draft(meta_data, temp_dir)
+        if _description_target_moved(payload, meta_data):
+            return jsonify(
+                {
+                    "success": False,
+                    "error": "The queue moved on to the next release before this edit was saved",
+                    "version": current_version,
+                    "target": _description_review_target(meta_data),
+                }
+            ), 409
         if requested_version != current_version:
             return jsonify({"success": False, "error": "Description changed in another browser tab", "version": current_version}), 409
 
         next_version = current_version + 1
         save_review(temp_dir, content, next_version)
-    return jsonify({"success": True, "content": content, "version": next_version})
+    return jsonify({"success": True, "content": content, "version": next_version, "target": _description_review_target(meta_data)})
 
 
 @app.route("/api/execution_screenshots/<screenshot_id>/image")
