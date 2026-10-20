@@ -315,21 +315,21 @@ class InfinityHD(UNIT3D):
     def _localized_aka(meta: Meta, tmdb_title: str) -> str:
         """AKA sourced from IMDb.
 
-        English-origin shows use IMDb's display title (when it differs from the TMDB title);
-        every other origin uses IMDb's romanized original title (its ``aka``), never TMDB's
-        native-language alternate. Suppressed when it just echoes the title.
+        English-origin shows use IMDb's display title when it differs from the TMDB title,
+        falling back to IMDb's original title when the display title matches TMDB (House ->
+        AKA House M.D.); every other origin uses IMDb's romanized original title (its ``aka``),
+        never TMDB's native-language alternate. Suppressed when it just echoes the title.
         """
         imdb_info = meta.imdb_info if isinstance(meta.imdb_info, dict) else {}
         original_language = str(meta.original_language or "").strip().lower()
         original_language = original_language.split("-")[0].split("(")[0].strip()
         is_english = original_language in ("en", "eng", "english")
-        aka_source = imdb_info.get("title") if is_english else imdb_info.get("aka")
-        aka = str(aka_source or "").strip()
-        if not aka:
-            return ""
-        if aka.lower() == tmdb_title.lower() or aka.lower() in tmdb_title.lower():
-            return ""
-        return f"AKA {aka}"
+        tmdb_key = tmdb_title.lower()
+        for key in ("title", "aka") if is_english else ("aka",):
+            aka = str(imdb_info.get(key) or "").strip()
+            if aka and aka.lower() != tmdb_key and aka.lower() not in tmdb_key:
+                return f"AKA {aka}"
+        return ""
 
     async def _tv_title_needs_year(self, meta: Meta, title: str | None = None) -> bool:
         title = str(title if title is not None else (meta.title or "")).strip()
