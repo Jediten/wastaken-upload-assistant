@@ -267,6 +267,10 @@ class DarkPeers(UNIT3D):
             return True
         if resolution == "360p":
             return self._reject("only permits 360p when no official higher-resolution release exists.")
+        # Non-standard resolutions such as 540p upload as "Other"; ones the mapping would
+        # file under a different resolution (1440p -> 1080p) stay unsupported.
+        if resolution and (await self.get_resolution_id(meta))["resolution_id"] == "10":
+            return True
         logger.info(f"{self.tracker}: [bold red]does not support {resolution or 'an unknown'} video resolution. Skipping upload.")
         return False
 
