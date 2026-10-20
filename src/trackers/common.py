@@ -214,10 +214,9 @@ class Common:
             languages_to_check=["portuguese", "português", "por", "pt", "pt-br", "pt br", "brazilian portuguese"],
             check_audio=True,
             check_subtitle=True,
-            prompt_on_failure=False,
         )
-        if not subtitles and (not meta.unattended or meta.unattended_confirm):
-            return await self.prompt_user_for_confirmation(f"{tracker}: No Portuguese audio or subtitles found. Do you want to proceed with the upload?")
+        if not subtitles:
+            logger.info(f"{tracker}: [bold red]No Portuguese audio or subtitles found.[/bold red]")
         return subtitles
 
     def _format_language_for_display(self, language: str) -> str:
@@ -1131,7 +1130,6 @@ class Common:
         require_both: bool = False,
         original_language: bool = False,
         original_required: bool = False,
-        prompt_on_failure: bool = True,
     ) -> bool:
         """
         Check if the media metadata meets specific language requirements for audio and/or subtitles.
@@ -1158,8 +1156,6 @@ class Common:
         :type original_language: bool
         :param original_required: If True, the original language must be present in the audio tracks.
         :type original_required: bool
-        :param prompt_on_failure: If True, ask whether to continue when the requirement is not met.
-        :type prompt_on_failure: bool
         :return: True if the media meets the specified language requirements, False otherwise.
         :rtype: bool
         """
@@ -1179,11 +1175,6 @@ class Common:
                         f"[yellow]Required one of:[/yellow] {', '.join(languages_to_check)}\n"
                         f"[cyan]Found book language:[/cyan] {book_language}"
                     )
-                    if prompt_on_failure:
-                        return await self.prompt_user_for_confirmation(
-                            f"{tracker}: Language requirements not met. Do you want to proceed with the upload?",
-                            meta,
-                        )
                 return meets_requirement
             return True
 
@@ -1226,11 +1217,6 @@ class Common:
                     f"[yellow]Required original audio language:[/yellow] {language_display}\n"
                     f"[cyan]Found Audio Languages:[/cyan] {', '.join(audio_languages) or 'None'}"
                 )
-                if prompt_on_failure:
-                    return await self.prompt_user_for_confirmation(
-                        f"{tracker}: Language requirements not met. Do you want to proceed with the upload?",
-                        meta,
-                    )
                 return False
 
             audio_ok = not check_audio or any(lang in audio_languages for lang in languages_to_check)
@@ -1278,11 +1264,6 @@ class Common:
                         f"[cyan]Found Subtitles:[/cyan] {', '.join(subtitle_languages) or 'None'}"
                     )
 
-            if not meets_requirement and prompt_on_failure:
-                return await self.prompt_user_for_confirmation(
-                    f"{tracker}: Language requirements not met. Do you want to proceed with the upload?",
-                    meta,
-                )
             return meets_requirement
 
         except Exception as e:
@@ -1324,21 +1305,17 @@ class Common:
 
     def check_and_confirm_adult_media_upload(self, meta: Meta, tracker: str) -> bool:
         """
-        Check if the media is categorized as adult/pornographic and prompt the user for confirmation before uploading to a non-adult tracker.
+        Check that the media is not adult/pornographic content for a non-adult tracker.
+
+        The override prompt is asked once by the tracker status manager, not here.
 
         :param meta: Metadata dictionary containing category and genre information.
-        :param tracker: The tracker name for display in the prompt.
-        :return: True if the user confirms or if the media is not adult, False otherwise.
+        :param tracker: The tracker name for display in the failure message.
+        :return: True if the media is not adult, False otherwise.
         """
         if meta.adult_media:
-            if not meta.unattended or (meta.unattended and meta.unattended_confirm):
-                logger.info(f"[bold red]Pornography is not allowed at {tracker}.[/bold red]")
-                if cli_ui.ask_yes_no("Do you want to upload anyway?", default=False):
-                    pass
-                else:
-                    return False
-            else:
-                return False
+            logger.info(f"{tracker}: [bold red]Pornography is not allowed at {tracker}.[/bold red]")
+            return False
 
         return True
 

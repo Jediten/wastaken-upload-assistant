@@ -2,8 +2,6 @@
 import re
 from typing import Any, cast
 
-import cli_ui
-
 from src.console import logger
 from src.languages import languages_manager
 from src.meta import Meta
@@ -202,6 +200,7 @@ class DreadVault(UNIT3D):
         return {"name": " ".join(dreadvault_name.split())}
 
     async def get_additional_checks(self, meta: Meta) -> bool:
+        passed = True
         combined_genres_value = meta.combined_genres
         if isinstance(combined_genres_value, list):
             combined_genres = cast(list[str], combined_genres_value)
@@ -211,26 +210,14 @@ class DreadVault(UNIT3D):
         # substring per term: the horror signal is often a compound keyword
         searchable = {term.lower() for term in [*combined_genres, *meta.keywords]}
         if not any("horror" in term for term in searchable):
-            if not meta.unattended or (meta.unattended and meta.unattended_confirm):
-                logger.info(f"{self.tracker}: [bold red]Only horror content is allowed at {self.tracker}.[/bold red]")
-                if cli_ui.ask_yes_no("Do you want to upload anyway?", default=False):
-                    pass
-                else:
-                    return False
-            else:
-                return False
+            logger.info(f"{self.tracker}: [bold red]Only horror content is allowed at {self.tracker}.[/bold red]")
+            passed = False
 
         genres = ", ".join([*meta.keywords, *combined_genres])
         # only terms that never appear as TMDB keywords on legitimate horror
         adult_keywords = ["xxx", "porn", "adult", "hentai", "softcore"]
         if any(re.search(rf"(^|,\s*){re.escape(keyword)}(\s*,|$)", genres, re.IGNORECASE) for keyword in adult_keywords):
-            if not meta.unattended or (meta.unattended and meta.unattended_confirm):
-                logger.info(f"{self.tracker}: [bold red]Porn/xxx is not allowed at {self.tracker}.[/bold red]")
-                if cli_ui.ask_yes_no("Do you want to upload anyway?", default=False):
-                    pass
-                else:
-                    return False
-            else:
-                return False
+            logger.info(f"{self.tracker}: [bold red]Porn/xxx is not allowed at {self.tracker}.[/bold red]")
+            passed = False
 
-        return self.common.check_and_confirm_adult_media_upload(meta, self.tracker)
+        return self.common.check_and_confirm_adult_media_upload(meta, self.tracker) and passed

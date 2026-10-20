@@ -2,8 +2,6 @@
 import re
 from typing import Any
 
-import cli_ui
-
 from src.console import logger
 from src.get_desc import DescriptionBuilder
 from src.languages import languages_manager
@@ -158,25 +156,21 @@ class SkipTheCommercials(UNIT3D):
                 logger.info(f"{self.tracker}: [bold red]Only TV and documentary movie uploads are allowed at {self.tracker}.[/bold red]")
             return False
 
+        passed = True
         genres = ", ".join(str(value) for value in [*(meta.keywords or []), *combined_genres])
         adult_keywords = ["xxx", "erotic", "porn", "adult", "orgy", "hentai", "adult animation", "softcore"]
         if any(re.search(rf"(^|,\s*){re.escape(keyword)}(\s*,|$)", genres, re.IGNORECASE) for keyword in adult_keywords):
-            if not meta.unattended or (bool(meta.unattended) and meta.unattended_confirm):
-                logger.info(f"{self.tracker}: [bold red]Porn is not allowed at {self.tracker}.[/bold red]")
-                if cli_ui.ask_yes_no("Do you want to upload anyway?", default=False):
-                    pass
-                else:
-                    return False
-            else:
-                return False
+            logger.info(f"{self.tracker}: [bold red]Porn is not allowed at {self.tracker}.[/bold red]")
+            passed = False
 
         if not meta.valid_mi_settings:
             logger.info(f"{self.tracker}: [bold red]No encoding settings in mediainfo, skipping {self.tracker} upload.[/bold red]")
             return False
 
-        return meta.is_disc in ["BDMV", "DVD"] or await self.common.check_language_requirements(
+        language_ok = meta.is_disc in ["BDMV", "DVD"] or await self.common.check_language_requirements(
             meta, self.tracker, languages_to_check=["english"], check_audio=True, check_subtitle=True, original_language=True
         )
+        return language_ok and passed
 
     async def get_name(self, meta: Meta) -> dict[str, str]:
         stc_name = meta.name

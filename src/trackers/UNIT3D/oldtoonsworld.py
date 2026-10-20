@@ -2,8 +2,6 @@
 import re
 from typing import Any, cast
 
-import cli_ui
-
 from src.console import logger
 from src.meta import Meta
 from src.trackers.common import Common
@@ -103,6 +101,7 @@ class OldToonsWorld(UNIT3D):
         self.common = Common(config)
 
     async def get_additional_checks(self, meta: Meta) -> bool:
+        passed = True
         combined_genres_value = meta.combined_genres
         # Normalize combined_genres to a list of individual genre strings.
         if isinstance(combined_genres_value, list):
@@ -112,51 +111,27 @@ class OldToonsWorld(UNIT3D):
             combined_genres = [g.strip() for g in str(combined_genres_value).split(",") if g.strip()]
 
         if not any(genre in combined_genres for genre in ["Animation", "Family"]):
-            if not meta.unattended or (meta.unattended and meta.unattended_confirm):
-                logger.info(f"{self.tracker}: [bold red]Genre does not match Animation or Family for OldToonsWorld.")
-                if cli_ui.ask_yes_no("Do you want to upload anyway?", default=False):
-                    pass
-                else:
-                    return False
-            else:
-                return False
+            logger.info(f"{self.tracker}: [bold red]Genre does not match Animation or Family for OldToonsWorld.")
+            passed = False
 
         keywords = ", ".join(meta.keywords)
         combined_genres_text = ", ".join(combined_genres)
         genres = f"{keywords} {combined_genres_text}"
         adult_keywords = ["xxx", "erotic", "porn", "adult", "orgy", "hentai", "adult animation", "softcore"]
         if any(re.search(rf"(^|,\s*){re.escape(keyword)}(\s*,|$)", genres, re.IGNORECASE) for keyword in adult_keywords):
-            if not meta.unattended or (meta.unattended and meta.unattended_confirm):
-                logger.info(f"{self.tracker}: [bold red]Adult animation not allowed at OldToonsWorld.")
-                if cli_ui.ask_yes_no("Do you want to upload anyway?", default=False):
-                    pass
-                else:
-                    return False
-            else:
-                return False
+            logger.info(f"{self.tracker}: [bold red]Adult animation not allowed at OldToonsWorld.")
+            passed = False
 
         game_show_keywords = ["reality", "game show", "game-show", "reality tv", "reality television"]
         if any(re.search(rf"(^|,\s*){re.escape(keyword)}(\s*,|$)", genres, re.IGNORECASE) for keyword in game_show_keywords):
-            if not meta.unattended or (meta.unattended and meta.unattended_confirm):
-                logger.info(f"{self.tracker}: [bold red]Reality / Game Show content not allowed at OldToonsWorld.")
-                if cli_ui.ask_yes_no("Do you want to upload anyway?", default=False):
-                    pass
-                else:
-                    return False
-            else:
-                return False
+            logger.info(f"{self.tracker}: [bold red]Reality / Game Show content not allowed at OldToonsWorld.")
+            passed = False
 
         if meta.type not in ["WEBDL"] and not meta.is_disc and meta.tag in ["CMRG", "EVO", "TERMiNAL", "ViSION"]:
-            if not meta.unattended or (meta.unattended and meta.unattended_confirm):
-                logger.info(f"{self.tracker}: [bold red]Group {meta.tag} is only allowed for raw type content at OldToonsWorld[/bold red]")
-                if cli_ui.ask_yes_no("Do you want to upload anyway?", default=False):
-                    pass
-                else:
-                    return False
-            else:
-                return False
+            logger.info(f"{self.tracker}: [bold red]Group {meta.tag} is only allowed for raw type content at OldToonsWorld[/bold red]")
+            passed = False
 
-        return True
+        return passed
 
     async def get_type_id(self, meta: Meta, type: str | None = None, reverse: bool = False, mapping_only: bool = False) -> dict[str, str]:
         type_id = {"DISC": "1", "REMUX": "2", "WEBDL": "4", "WEBRIP": "5", "HDTV": "6", "ENCODE": "3", "DVDRIP": "8"}

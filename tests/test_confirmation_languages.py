@@ -51,9 +51,9 @@ def test_detected_languages_survive_repeated_confirmation_corrections(tmp_path, 
         assert meta.subtitle_languages == ["Spanish"]
         assert meta.service == "AMZN"
         common = Common(config)
-        assert asyncio.run(common.check_language_requirements(meta, "LST", ["English"], check_audio=True, check_subtitle=True, prompt_on_failure=False))
+        assert asyncio.run(common.check_language_requirements(meta, "LST", ["English"], check_audio=True, check_subtitle=True))
         assert asyncio.run(common.check_language_requirements(
-            meta, "AITHER", [], original_language=True, original_required=True, prompt_on_failure=False
+            meta, "AITHER", [], original_language=True, original_required=True
         ))
     ask_string.assert_not_called()
 
@@ -118,7 +118,7 @@ def test_hardcoded_subtitle_correction_updates_checked_languages(tmp_path, monke
         assert meta.audio_languages == ["English"]
         assert bool(meta.write_audio_languages) is manual_audio
         assert asyncio.run(Common(config).check_language_requirements(
-            meta, "LST", [language], check_subtitle=True, prompt_on_failure=False
+            meta, "LST", [language], check_subtitle=True
         ))
     assert ask_string.call_count == int(manual_audio)
 
@@ -155,6 +155,6 @@ def test_category_correction_runs_previously_inapplicable_language_check(tmp_pat
     assert meta.audio_languages == ["English"]
     assert meta.subtitle_languages == ["Spanish"]
     assert asyncio.run(Common(config).check_language_requirements(
-        meta, "AITHER", [], original_language=True, original_required=True, prompt_on_failure=False
+        meta, "AITHER", [], original_language=True, original_required=True
     ))
     ask_string.assert_not_called()

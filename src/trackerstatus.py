@@ -40,14 +40,16 @@ class TrackerStatusManager:
 
         Tracker checks deliberately remain responsible for validating tracker rules
         and explaining failures.  The upload decision belongs here so every
-        tracker gets the same attended/unattended behaviour.
+        tracker gets the same attended/unattended behaviour.  Checks must not ask
+        their own "upload anyway?" question: trackers are checked concurrently, so
+        a second prompt races this one for stdin and the user is asked twice.
         """
         check = getattr(tracker, "get_additional_checks", None)
         if check is None:
             return True
 
         result = await check(meta) if inspect.iscoroutinefunction(check) else check(meta)
-        if result or meta.get("unattended", False):
+        if result or (meta.get("unattended", False) and not meta.get("unattended_confirm", False)):
             return bool(result)
 
         if sys.stdin.closed:

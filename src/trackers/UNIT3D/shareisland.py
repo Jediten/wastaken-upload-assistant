@@ -14,7 +14,7 @@ from babel import Locale
 from babel.core import UnknownLocaleError
 
 from src.audio import AudioManager
-from src.console import logger
+from src.console import logger, prompt_in_thread
 from src.languages import languages_manager
 from src.meta import Meta
 from src.trackers.common import Common
@@ -291,7 +291,7 @@ class ShareIsland(UNIT3D):
             # Prompt for region if not in meta
             if not region_name and (not meta.unattended or meta.unattended_confirm):
                 while True:
-                    region_name = cli_ui.ask_string("ShareIsland: Region code not found for disc. Please enter it manually (mandatory): ")
+                    region_name = await prompt_in_thread(cli_ui.ask_string, "ShareIsland: Region code not found for disc. Please enter it manually (mandatory): ")
                     region_name = region_name.strip().upper() if region_name else None
                     if region_name:
                         break
@@ -312,7 +312,7 @@ class ShareIsland(UNIT3D):
             distributor_name = meta.distributor
             distributor_id = None
             if not distributor_name and not meta.unattended:
-                distributor_name = cli_ui.ask_string("ShareIsland: Distributor (optional, Enter to skip): ")
+                distributor_name = await prompt_in_thread(cli_ui.ask_string, "ShareIsland: Distributor (optional, Enter to skip): ")
                 distributor_name = distributor_name.strip().upper() if distributor_name else None
 
             if distributor_name:

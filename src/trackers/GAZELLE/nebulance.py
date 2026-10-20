@@ -5,7 +5,6 @@ from typing import Any, cast
 from urllib.parse import urlencode
 
 import aiofiles
-import cli_ui
 import httpx
 
 from src.cogs.redaction import Redaction
@@ -172,16 +171,11 @@ class Nebulance:
             return False
 
     async def get_additional_checks(self, meta: Meta) -> bool:
+        passed = True
         if meta.category != "TV":
             if meta.tvmaze_id != 0:
-                if not meta.unattended or (meta.unattended and meta.unattended_confirm):
-                    logger.info(f"{self.tracker}: [red]Only TV or TV Movies are allowed at {self.tracker}, this has a tvmaze ID[/red]")
-                    if cli_ui.ask_yes_no("Do you want to upload it?", default=False):
-                        pass
-                    else:
-                        return False
-                else:
-                    return False
+                logger.info(f"{self.tracker}: [red]Only TV or TV Movies are allowed at {self.tracker}, this has a tvmaze ID[/red]")
+                passed = False
             else:
                 if not meta.unattended:
                     logger.info(f"{self.tracker}: [red]Only TV Is allowed at {self.tracker}[/red]")
@@ -201,7 +195,7 @@ class Nebulance:
                 logger.info(f"{self.tracker}: [bold red]does not allow raw discs[/bold red]")
             return False
 
-        return True
+        return passed
 
     async def search_existing(self, meta: Meta) -> list[dict[str, Any]] | bool:
         dupes: list[dict[str, Any]] = []

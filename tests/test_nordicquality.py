@@ -84,13 +84,13 @@ def test_nordicquality_rejects_movie_without_nordic_subtitles():
     assert asyncio.run(_tracker().get_additional_checks(meta)) is False  # noqa: S101
 
 
-def test_nordicquality_allows_attended_confirmation_after_missing_subtitles():
+def test_nordicquality_leaves_attended_override_to_the_status_manager():
     meta = Meta(category="MOVIE", language_checked=True, subtitle_languages=["English"])
     tracker = _tracker()
     tracker.common.prompt_user_for_confirmation = AsyncMock(return_value=True)
 
-    assert asyncio.run(tracker.get_additional_checks(meta)) is True  # noqa: S101
-    tracker.common.prompt_user_for_confirmation.assert_awaited_once()
+    assert asyncio.run(tracker.get_additional_checks(meta)) is False  # noqa: S101
+    tracker.common.prompt_user_for_confirmation.assert_not_awaited()
 
 
 def test_nordicquality_sanitizes_upload_name():

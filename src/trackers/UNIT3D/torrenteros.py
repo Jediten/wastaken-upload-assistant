@@ -137,12 +137,7 @@ class Torrenteros(UNIT3D):
             if "Spanish" not in (meta.subtitle_languages or []):
                 logger.info(f"{self.tracker}: [bold red]requires at least one Spanish audio or subtitle track.")
                 return False
-            if meta.unattended:
-                if not meta.unattended_confirm:
-                    return False
-            else:
-                logger.info(f"{self.tracker}: [yellow]No Spanish audio track found, but Spanish subtitles are present.[/yellow]")
-                if not cli_ui.ask_yes_no("Do you want to upload anyway?", default=False):
-                    return False
+            logger.info(f"{self.tracker}: [yellow]No Spanish audio track found, but Spanish subtitles are present.[/yellow]")
+            return False
 
         return True

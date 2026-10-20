@@ -3,8 +3,6 @@ import re
 from pathlib import Path
 from typing import Any, cast
 
-import cli_ui
-
 from src.console import logger
 from src.meta import Meta
 from src.trackers.common import Common
@@ -201,16 +199,11 @@ class Seedpool(UNIT3D):
         return {"name": name}
 
     async def get_additional_checks(self, meta: Meta) -> bool:
+        passed = True
         resolution = meta.resolution
         if meta.category in {"MOVIE", "TV"} and resolution not in ["8640p", "4320p", "2160p", "1440p", "1080p", "1080i"]:
             logger.info(f"{self.tracker}: [bold red]Only 1080 or higher resolutions allowed at {self.tracker}.[/bold red]")
-            if not meta.unattended or (bool(meta.unattended) and meta.unattended_confirm):
-                if cli_ui.ask_yes_no("Do you want to upload anyway?", default=False):
-                    pass
-                else:
-                    return False
-            else:
-                return False
+            passed = False
 
         disallowed_keywords = {"xxx", "erotic", "porn"}
         disallowed_genres = {"adult", "erotica"}
@@ -221,16 +214,10 @@ class Seedpool(UNIT3D):
         else:
             combined_genres = [str(g) for g in cast(list[Any], combined_genres_val)]
         if any(keyword.lower() in disallowed_keywords for keyword in keywords) or any(genre.lower() in disallowed_genres for genre in combined_genres):
-            if not meta.unattended or (bool(meta.unattended) and meta.unattended_confirm):
-                logger.info(f"{self.tracker}: [bold red]Porn/xxx is not allowed at {self.tracker}.[/bold red]")
-                if cli_ui.ask_yes_no("Do you want to upload anyway?", default=False):
-                    pass
-                else:
-                    return False
-            else:
-                return False
+            logger.info(f"{self.tracker}: [bold red]Porn/xxx is not allowed at {self.tracker}.[/bold red]")
+            passed = False
 
-        return True
+        return passed
 
     async def get_additional_data(self, meta: Meta) -> dict[str, Any]:
         return {

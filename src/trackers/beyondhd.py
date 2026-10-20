@@ -5,7 +5,6 @@ from pathlib import Path
 from typing import Any, cast
 
 import aiofiles
-import cli_ui
 import httpx
 from rich.markup import escape
 
@@ -357,6 +356,7 @@ class BEYONDHD:
             return
 
     async def get_additional_checks(self, meta: Meta) -> bool:
+        passed = True
         bhd_name = await self.get_name(meta)
         if any(
             phrase in bhd_name.lower()
@@ -380,14 +380,8 @@ class BEYONDHD:
                 "-beyondhd",
             )
         ):
-            if not meta.unattended or (meta.unattended and meta.unattended_confirm):
-                logger.info(f"{self.tracker}: [bold red]This is an internal {self.tracker} release, skipping upload[/bold red]")
-                if cli_ui.ask_yes_no("Do you want to upload anyway?", default=False):
-                    pass
-                else:
-                    return False
-            else:
-                return False
+            logger.info(f"{self.tracker}: [bold red]This is an internal {self.tracker} release, skipping upload[/bold red]")
+            passed = False
 
         if not meta.valid_mi_settings:
             logger.info(f"{self.tracker}: [bold red]No encoding settings in mediainfo, skipping {self.tracker} upload.[/bold red]")
@@ -400,17 +394,11 @@ class BEYONDHD:
             return False
 
         if meta.type not in ["WEBDL"] and meta.tag and any(x in meta.tag for x in ["EVO"]):
-            if not meta.unattended or (meta.unattended and meta.unattended_confirm):
-                logger.info(f"{self.tracker}: [bold red]Group {escape(str(meta.tag))} is only allowed for raw type content at {self.tracker}[/bold red]")
-                if cli_ui.ask_yes_no("Do you want to upload anyway?", default=False):
-                    pass
-                else:
-                    return False
-            else:
-                return False
+            logger.info(f"{self.tracker}: [bold red]Group {escape(str(meta.tag))} is only allowed for raw type content at {self.tracker}[/bold red]")
+            passed = False
 
         common = Common(config=self.config)
-        return common.check_and_confirm_adult_media_upload(meta, self.tracker)
+        return common.check_and_confirm_adult_media_upload(meta, self.tracker) and passed
 
     async def search_existing(self, meta: Meta) -> list[dict[str, Any]]:
         dupes: list[dict[str, Any]] = []
