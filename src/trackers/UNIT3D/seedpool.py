@@ -184,17 +184,22 @@ class Seedpool(UNIT3D):
 
     async def get_name(self, meta: Meta) -> dict[str, str]:
         known_extensions = {".mkv", ".mp4", ".avi", ".ts"}
+        source_name = meta.basename_no_ext or meta.uuid or meta.name
+        if meta.category in {"MOVIE", "TV"} and not meta.is_disc and len(meta.filelist) == 1:
+            media_path = meta.filelist[0]
+            if isinstance(media_path, str) and media_path.strip():
+                source_name = Path(media_path).name
+
         if meta.scene:
-            scene_name = meta.scene_name
-            name = scene_name if scene_name != "" else meta.basename_no_ext.replace(" ", ".")
-        elif bool(meta.is_disc):
+            name = meta.scene_name or source_name
+        elif meta.is_disc:
             name = meta.name.replace(" ", ".")
         else:
-            name = meta.basename_no_ext.replace(" ", ".")
+            # Filename-derived titles (anime included) retain their original spacing and punctuation.
+            name = source_name
         p = Path(name)
-        base, ext = p.stem, p.suffix
-        if ext.lower() in known_extensions:
-            name = base.replace(" ", ".")
+        if p.suffix.lower() in known_extensions:
+            name = p.stem
 
         return {"name": name}
 

@@ -13,6 +13,12 @@ config: dict[str, Any] = {
         # Set to True to play a bell sound before release confirmation (CLI and WebUI).
         # WebUI sound plays in the browser; allow site audio and keep the tab unmuted.
         "sfx_on_prompt": True,
+        # Set to True to keep WebUI uploads running after their browser tab closes or disconnects.
+        # Reopen the WebUI to resume watching them. Set to False to kill an upload when its tab disconnects.
+        "webui_keep_uploads_on_disconnect": True,
+        # Minutes a WebUI upload may wait at an unanswered prompt with no browser connected before it is killed.
+        # Set to 0 to wait indefinitely.
+        "webui_unattended_prompt_timeout": 60,
         # Set to True to apply argument overrides from data/templates/user-args.json.
         "user_overrides": False,
         # Apply --personalrelease when the detected release group matches any tag (case-insensitive).
@@ -95,9 +101,6 @@ config: dict[str, Any] = {
         "ffmpeg_path": "",
         "ffprobe_path": "",
         "mediainfo_path": "",
-        # The DVD-specific MediaInfo executable must remain on version 23.04 because
-        # newer releases do not preserve its DVD parsing behavior.
-        "dvd_mediainfo_path": "",
         "bdinfo_path": "",
         "mkbrr_path": "",
         "dovi_tool_path": "",
@@ -514,6 +517,11 @@ config: dict[str, Any] = {
         # For example, 20 excludes a duplicate that is at least 20% larger or smaller.
         # Set to None or remove this setting to disable the feature.
         "dupe_size_difference_tolerance": None,
+        # Check MOVIE and TV duplicates against each tracker's slot rules, where Upload Assistant has them.
+        # Shows a recommendation (upload / don't upload / review) with the date of the rules it is based on.
+        # In unattended mode the recommendation decides whether to upload; when it can't decide, the basic check is used.
+        # Default: True (also when this setting is missing).
+        "slot_rules": True,
         # See docs/upload-order-and-bandwidth-control.md for workflows and qBittorrent requirements.
         "upload_order": "concurrent",
         "qbit_bandwidth_control": False,
@@ -573,7 +581,7 @@ config: dict[str, Any] = {
         #   PEERGARDEN, POLISHTORRENT, PORTUGAS, PRIVATEHD, PTCAFE, PTERCLUB, PTFANS, PTGTK, PTSKIT, PTZONE, QINGWA, RACING4EVERYONE, RAILGUNPT,
         #   RASTASTUGAN, REELFLIX, RETROFLIX, RETROMOVIESCLUB, ROCKETHD, SAMARITANO, SEEDPOOL, SHAREISLAND, SKIPTHECOMMERCIALS, SPEEDAPP,
         #   SUIO, SWARMAZON, THELEACHZONE, THEOLDSCHOOL, TORRENTEROS, TORRENTHAVEN, TORRENTHR, TORRENTLEECH, TOTHEGLORY, TVCHAOSUK, ULCX, UTOPIA,
-        #   VIETMEDIAF, XINGYUNGEPT, YUSCENE, ZENITH
+        #   VIETMEDIAF, VULTU, XINGYUNGEPT, YUSCENE, ZENITH
         # This list is validated against the tracker blocks below by the test suite.
         # Only add the trackers you want to upload to on a regular basis
         "default_trackers": "",
@@ -3529,6 +3537,14 @@ config: dict[str, Any] = {
             "bluray_image_size": "",
             "add_audio_spectrogram": True,
             "inject_delay": 0,
+        },
+        "VULTU": {
+            "cli_alias": "VLT",
+            # Instead of using the tracker acronym for folder name when sym/hard linking, you can use a custom name
+            "link_dir_name": "",
+            # Generate a token at Settings > Upload API.
+            "api_key": "",
+            "anon": True,
         },
         "XINGYUNGEPT": {
             "cli_alias": "XYPT",

@@ -268,6 +268,8 @@ Implementation notes:
 ### UX / safety toggles
 
 - `sfx_on_prompt` (bool, default `True`): Play a bell before release confirmation. CLI runs use the terminal bell; WebUI runs play the sound in the browser after clicking Execute. Allow site audio and keep the tab unmuted. Fully unattended runs skip the sound along with confirmation.
+- `webui_keep_uploads_on_disconnect` (bool, default `True`): Keep a WebUI upload running after its browser tab closes, reloads, or loses the connection. Reopen the WebUI to see its tab again. Set to `False` to kill an upload as soon as its tab disconnects.
+- `webui_unattended_prompt_timeout` (number, default `60`): Minutes a WebUI upload may wait at an unanswered prompt while no browser is connected before it is killed. Set `0` to wait indefinitely.
 - `embed_links` (bool): Set true to embed terminal links using terminal hyperlinks (OSC 8). Set false to display the full raw URLs. `embed_dupe_links` remains supported temporarily as a deprecated alias.
 - `tracker_pass_checks` (str): Minimum number of trackers that must pass checks to continue upload.
 - `use_largest_playlist` (bool): Always use the largest Blu-ray playlist without prompting.
@@ -280,6 +282,7 @@ Implementation notes:
 - `tracker_pass_checks` is used to determine how many trackers must pass early validation before continuing (see `upload.py`).
 - `tracker_description_mode` is the only configuration that controls imported tracker description text and screenshots. `--onlyID` temporarily forces `ids` for that execution.
 - `tracker_comment_only` does not disable explicit IDs supplied through `--tracker-id`.
+- See [Importing IDs and Descriptions from Other Trackers](tracker-metadata-import.md) for the full workflow, supported source trackers and troubleshooting.
 
 ### Sonarr / Radarr integration
 

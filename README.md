@@ -8,7 +8,7 @@
 
 Upload Assistant collects metadata, generates screenshots and artwork, creates torrent or NZB files, and publishes releases to the destinations you choose. Use it through a browser interface (WebUI) or the command line (CLI).
 
-<img width="5760" height="3240" alt="1" src="https://github.com/user-attachments/assets/c5df044f-2ea7-4ba9-bcd0-54a2e2cad731" />
+<img width="3840" height="2160" alt="1" src="https://github.com/user-attachments/assets/b375a324-2925-4e70-90e6-136881099b3e" />
 
 ---
 
@@ -17,7 +17,6 @@ Upload Assistant collects metadata, generates screenshots and artwork, creates t
 ---
 
 <img width="5739" height="4143" alt="3" src="https://github.com/user-attachments/assets/9164de0f-7901-4a1b-a567-10f97f3cf33b" />
-
 
 ---
 
@@ -403,6 +402,7 @@ uv tool install --force git+https://github.com/wastaken7/Upload-Assistant.git
 | <img src="web_ui/static/img/trackers/ulcx.png" width="16" height="16" />                      | ULCX                   | ULCX                   | MOVIE, TV                    |
 | <img src="web_ui/static/img/trackers/utopia.png" width="16" height="16" />                    | UTOPIA                 | UTOPIA                 | MOVIE, TV                    |
 | <img src="web_ui/static/img/trackers/vietmediaf.png" width="16" height="16" />                | VietMediaF             | VIETMEDIAF             | MOVIE, TV                    |
+| <img src="web_ui/static/img/trackers/vultu.png" width="16" height="16" />                     | vultu                  | VULTU                  | MOVIE, TV, GAME              |
 | <img src="web_ui/static/img/trackers/yuscene.png" width="16" height="16" />                   | YUSCENE                | YUSCENE                | MOVIE, TV, BOOK, GAME, MUSIC |
 | <img src="web_ui/static/img/trackers/zenith.png" width="16" height="16" />                    | Zenith                 | ZENITH                 | MOVIE, TV, BOOK, GAME, MUSIC |
 
@@ -417,6 +417,7 @@ uv tool install --force git+https://github.com/wastaken7/Upload-Assistant.git
 | <img src="web_ui/static/img/trackers/drunkenslug.png" width="16" height="16" /> | DrunkenSlug | DRUNKENSLUG | MOVIE, TV, BOOK, GAME        |
 | <img src="web_ui/static/img/trackers/nzbgeek.png" width="16" height="16" />     | NZBGeek     | NZBGEEK     | MOVIE, TV, BOOK, GAME, MUSIC |
 | <img src="web_ui/static/img/trackers/nzbnest.png" width="16" height="16" />     | NzbNest     | NZBNEST     | MOVIE, TV, BOOK, GAME, MUSIC |
+|                                                                                 | Suio        | SUIO        | MOVIE, TV, BOOK, GAME, XXX   |
 
 </details>
 
