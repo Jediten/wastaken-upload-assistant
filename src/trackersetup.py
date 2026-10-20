@@ -461,6 +461,41 @@ class TrackerSetup:
         with Path(file_path).open(encoding="utf-8") as file:
             return file.read()
 
+    async def _type_scoped_banned_groups(self, tracker: str, raw_data: list[Any], meta: Meta) -> list[Any]:
+        """Banned groups for this upload's type, from an API that scopes bans by release type.
+
+        An entry with `all_types: false` bans the group only for the tracker type IDs in
+        `type_ids`. When the upload's type or the entry's types can't be resolved, the ban applies.
+        Each group comes back as `[name, note]` so the reason is shown with the match.
+        """
+        type_id: int | None = None
+        tracker_instance = self._create_tracker_instance(tracker)
+        get_type_id = getattr(tracker_instance, "get_type_id", None)
+        if callable(get_type_id):
+            try:
+                resolved = cast(dict[str, str], await get_type_id(meta))
+                type_id = int(resolved.get("type_id", "0")) or None
+            except (TypeError, ValueError, AttributeError) as e:
+                logger.debug(f"Could not resolve the {tracker} type ID for banned groups: {e}")
+
+        groups: list[Any] = []
+        for entry in raw_data:
+            if not isinstance(entry, dict) or "name" not in entry:
+                continue
+            item = cast(JsonDict, entry)
+            types = [str(t) for t in cast(list[Any], item.get("types") or [])]
+            type_ids = {int(t) for t in cast(list[Any], item.get("type_ids") or []) if str(t).isdigit()}
+            scoped = item.get("all_types") is False
+            if scoped and type_id is not None and type_ids and type_id not in type_ids:
+                continue
+
+            notes = [str(item["reason"])] if item.get("reason") else []
+            if scoped and types:
+                notes.append(f"Banned types: {', '.join(types)}.")
+            groups.append([str(item["name"]), " ".join(notes)] if notes else str(item["name"]))
+
+        return groups
+
     async def check_banned_group(self, tracker: str, banned_group_list: list[Any], meta: Meta) -> bool:
         result = False
         if not meta.tag:
@@ -470,7 +505,7 @@ class TrackerSetup:
         if "taoe" in group_tags:
             group_tags = "taoe"
 
-        if tracker.upper() in ("AITHER", "CAPYBARABR", "DARKPEERS", "LST", "LUMINARR", "SPEEDAPP", "ZENITH"):
+        if tracker.upper() in ("AITHER", "CAPYBARABR", "DARKPEERS", "INFINITYHD", "LST", "LUMINARR", "SPEEDAPP", "ZENITH"):
             file_path = await self.get_banned_groups(meta, tracker)
             if file_path == "empty":
                 logger.info(f"[bold red]No banned groups found for '{tracker}'.")
@@ -483,8 +518,11 @@ class TrackerSetup:
                 try:
                     content = await asyncio.to_thread(self._read_file, file_path)
                     data = json.loads(content)
+                    raw_data = data.get("raw_data")
                     banned_groups = data.get("banned_groups", "")
-                    if banned_groups:
+                    if isinstance(raw_data, list) and any(isinstance(item, dict) and "all_types" in item for item in cast(list[Any], raw_data)):
+                        banned_group_list = await self._type_scoped_banned_groups(tracker, cast(list[Any], raw_data), meta)
+                    elif banned_groups:
                         banned_group_list = banned_groups.split(", ")
 
                 except FileNotFoundError:

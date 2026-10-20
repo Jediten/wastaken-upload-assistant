@@ -154,6 +154,7 @@ class InfinityHD(UNIT3D):
         "Zero00",
         "Zeus",
     )
+    banned_url = f"{base_url}/api/banned-groups"
     id_url = f"{base_url}/api/torrents/"
     upload_url = f"{base_url}/api/torrents/upload"
     search_url = f"{base_url}/api/torrents/filter"
