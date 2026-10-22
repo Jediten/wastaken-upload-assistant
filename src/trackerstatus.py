@@ -148,7 +148,7 @@ class TrackerStatusManager:
                     local_tracker_status["skipped"] = True
 
                 if not local_tracker_status["skipped"]:
-                    result = await tracker_setup.check_banned_group(tracker_class.tracker, tracker_class.banned_groups, local_meta)
+                    result = await tracker_setup.check_banned_group(tracker_class.tracker, tracker_class.banned_groups, local_meta, prompt_yes_no=helper.prompt_yes_no)
                     local_tracker_status["banned"] = bool(result)
 
                 if local_meta["tracker_status"][tracker_name].get("skip_upload"):

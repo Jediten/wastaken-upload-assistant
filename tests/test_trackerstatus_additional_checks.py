@@ -99,19 +99,23 @@ async def test_failed_additional_check_prompts_in_unattended_confirm_mode(monkey
     assert helper.prompted is True  # noqa: S101
 
 
+# Per-tracker code that TrackerStatusManager runs concurrently for every selected tracker.
+_CONCURRENT_CHECKS = {"get_additional_checks", "check_banned_group"}
+
+
 def _additional_check_functions() -> list[tuple[str, ast.AsyncFunctionDef | ast.FunctionDef]]:
     checks = []
-    for path in sorted(Path("src/trackers").rglob("*.py")):
+    for path in [*sorted(Path("src/trackers").rglob("*.py")), Path("src/trackersetup.py")]:
         checks.extend(
             (f"{path}:{node.lineno}", node)
             for node in ast.walk(ast.parse(path.read_text(encoding="utf-8")))
-            if isinstance(node, (ast.AsyncFunctionDef, ast.FunctionDef)) and node.name == "get_additional_checks"
+            if isinstance(node, (ast.AsyncFunctionDef, ast.FunctionDef)) and node.name in _CONCURRENT_CHECKS
         )
     return checks
 
 
 def test_tracker_checks_do_not_ask_their_own_override_question() -> None:
-    """Trackers are checked concurrently; only the status manager may ask "upload anyway?"."""
+    """Trackers are checked concurrently; a check may not block stdin, and only the status manager asks "upload anyway?"."""
     offenders = []
     for location, func in _additional_check_functions():
         for node in ast.walk(func):
@@ -122,9 +126,9 @@ def test_tracker_checks_do_not_ask_their_own_override_question() -> None:
                 and node.func.value.id == "cli_ui"
                 and node.func.attr.startswith("ask_")
             )
-            override_question = isinstance(node, ast.Constant) and isinstance(node.value, str) and "anyway?" in node.value
+            override_question = func.name == "get_additional_checks" and isinstance(node, ast.Constant) and isinstance(node.value, str) and "anyway?" in node.value
             if blocking_prompt or override_question:
                 offenders.append(f"{location} line {node.lineno}")
 
-    assert _additional_check_functions()  # noqa: S101
+    assert {func.name for _, func in _additional_check_functions()} == _CONCURRENT_CHECKS  # noqa: S101
     assert offenders == []  # noqa: S101

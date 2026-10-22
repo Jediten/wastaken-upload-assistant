@@ -4,6 +4,7 @@ import importlib
 import json
 import re
 import sys
+from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any, cast
@@ -16,7 +17,7 @@ import httpx
 from data.example_config import config as example_config
 from src.api_key_expiry import observe_tracker_response, warn_api_key_expiry
 from src.cleanup import cleanup_manager
-from src.console import logger
+from src.console import logger, prompt_in_thread
 from src.meta import Meta
 from src.trackers.common import Common
 
@@ -497,7 +498,7 @@ class TrackerSetup:
 
         return groups
 
-    async def check_banned_group(self, tracker: str, banned_group_list: list[Any], meta: Meta) -> bool:
+    async def check_banned_group(self, tracker: str, banned_group_list: list[Any], meta: Meta, prompt_yes_no: Callable[..., Awaitable[bool]] | None = None) -> bool:
         result = False
         if not meta.tag:
             return False
@@ -550,8 +551,14 @@ class TrackerSetup:
 
         if result:
             if not meta.unattended or meta.unattended_confirm:
+                # Trackers are checked concurrently: ask through the caller's shared prompt lock.
+                question = f"{tracker}: {meta.tag[1:]} is a banned group. Do you want to continue anyway?"
                 try:
-                    if cli_ui.ask_yes_no(cli_ui.red, "Do you want to continue anyway?", default=False):
+                    if prompt_yes_no is not None:
+                        proceed = await prompt_yes_no(question, default=False)
+                    else:
+                        proceed = await prompt_in_thread(cli_ui.ask_yes_no, question, default=False)
+                    if proceed:
                         return False
                 except EOFError:
                     logger.info("\n[red]Exiting on user request (Ctrl+C)[/red]")

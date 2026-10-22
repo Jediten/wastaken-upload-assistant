@@ -134,3 +134,19 @@ async def test_infinityhd_banned_groups_follow_the_release_type(tmp_path, monkey
 
     # The bundled list bans EVO outright; the API's type scope must win over it.
     assert await setup.check_banned_group("INFINITYHD", ["EVO"], meta) is banned
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("answer", "banned"), [(True, False), (False, True)])
+async def test_banned_group_override_asks_through_the_shared_prompt(answer: bool, banned: bool):
+    questions: list[str] = []
+
+    async def prompt_yes_no(question: str, default: bool = False) -> bool:
+        assert default is False
+        questions.append(question)
+        return answer
+
+    meta = Meta(tag="-ZR", unattended=False)
+
+    assert await TrackerSetup({}).check_banned_group("SKIPTHECOMMERCIALS", ["ZR"], meta, prompt_yes_no=prompt_yes_no) is banned
+    assert questions == ["SKIPTHECOMMERCIALS: ZR is a banned group. Do you want to continue anyway?"]
