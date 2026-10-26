@@ -1,8 +1,10 @@
 # Upload Assistant © 2025 Audionut & wastaken7 — Licensed under UAPL v1.0
 import re
+from dataclasses import replace
 from typing import Any
 
 from src.console import logger
+from src.get_name import build_name_components
 from src.meta import Meta
 from src.trackers.common import Common
 from src.trackers.naming import BLU_EDITION_TERMS, VideoNameRules, add_incomplete_pack_marker, build_video_name
@@ -127,7 +129,11 @@ class Aither(UNIT3D):
 
     async def get_name(self, meta: Meta):
         # A manual --name or a type outside the guide falls back to the generic name.
-        aither_name = await build_video_name(meta, AITHER_NAME_RULES, self.tracker) or meta.name
+        components = build_name_components(meta)
+        # Single episodes carry their title (S02E08 I THOUGHT YOU WERE STRONGER in the guide's examples).
+        if meta.category == "TV" and not meta.tv_pack and meta.episode and not components.episode_title and meta.auto_episode_title:
+            components = replace(components, episode_title=meta.auto_episode_title)
+        aither_name = await build_video_name(meta, AITHER_NAME_RULES, self.tracker, components) or meta.name
         if meta.trump_reason == "exact_match":
             aither_name = aither_name + " - TRUMP"
         return {"name": add_incomplete_pack_marker(aither_name, meta, self.tracker)}

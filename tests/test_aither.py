@@ -207,6 +207,25 @@ def test_aither_builds_tv_names(meta: Meta, expected: str) -> None:
     assert _name(meta) == expected
 
 
+@pytest.mark.parametrize(
+    ("meta", "expected"),
+    [
+        (_tv(episode="E08", auto_episode_title="Never Stop Moving"), "Synthetic Show S01E08 Never Stop Moving 1080p NF WEB-DL DD+ 5.1 H.264-TESTGROUP"),
+        (_tv(tv_pack=True, auto_episode_title="Never Stop Moving"), "Synthetic Show S01 1080p NF WEB-DL DD+ 5.1 H.264-TESTGROUP"),
+        (
+            _tv(episode="E01", manual_episode_title="Imaginary Storm", auto_episode_title="Never Stop Moving"),
+            "Synthetic Show S01E01 Imaginary Storm 1080p NF WEB-DL DD+ 5.1 H.264-TESTGROUP",
+        ),
+        (
+            _tv(manual_date="2024-01-02", daily_episode_title="2024-01-02", auto_episode_title="Never Stop Moving"),
+            "Synthetic Show 2024-01-02 1080p NF WEB-DL DD+ 5.1 H.264-TESTGROUP",
+        ),
+    ],
+)
+def test_aither_names_single_episodes_with_their_title(meta: Meta, expected: str) -> None:
+    assert _name(meta) == expected
+
+
 def test_aither_places_aka_before_movie_year() -> None:
     meta = _movie(aka="AKA Alternate Feature")
 
