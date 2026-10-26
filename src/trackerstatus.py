@@ -9,6 +9,7 @@ from typing import Any, cast
 
 import cli_ui
 
+from src import webui_events
 from src.cleanup import cleanup_manager
 from src.console import logger, prompt_in_thread
 from src.dupe_checking import DupeChecker
@@ -49,22 +50,32 @@ class TrackerStatusManager:
         if check is None:
             return True
 
-        result = await check(meta) if inspect.iscoroutinefunction(check) else check(meta)
-        if result or (meta.get("unattended", False) and not meta.get("unattended_confirm", False)):
-            return bool(result)
+        with webui_events.capture_tracker_checks(tracker_name, logger) as messages:
+            result = await check(meta) if inspect.iscoroutinefunction(check) else check(meta)
+        if result:
+            return True
 
-        if sys.stdin.closed:
-            return False
+        # -uac (unattended confirm) still asks; plain unattended runs never do.
+        if (not meta.get("unattended", False) or meta.get("unattended_confirm", False)) and not sys.stdin.closed:
+            try:
+                with webui_events.prompt_context(
+                    tracker=tracker_name,
+                    check_messages=messages or ["The tracker did not report a specific reason for this failed check."],
+                ):
+                    if await helper.prompt_yes_no(
+                        f"{tracker_name}: one or more upload checks failed. Do you want to proceed with the upload anyway?",
+                        default=False,
+                    ):
+                        return True
+            except EOFError:
+                pass
 
-        try:
-            return await helper.prompt_yes_no(
-                f"{tracker_name}: one or more upload checks failed. Do you want to proceed with the upload anyway?",
-                default=False,
-            )
-        except EOFError:
-            return False
+        status = meta.tracker_status.setdefault(tracker_name, {})
+        status["status_message"] = "\n".join(messages) or status.get("status_message") or "Upload checks failed"
+        return False
 
     async def process_all_trackers(self, meta: Meta) -> int:
+        """Check selected trackers and retain their decisions and explanations in shared metadata."""
         tracker_status: dict[str, dict[str, Any]] = {}
         successful_trackers = 0
         tracker_setup: Any = TrackerSetup(config=self.config)
@@ -84,9 +95,10 @@ class TrackerStatusManager:
             if needs_imdb:
                 while True:
                     try:
-                        imdb_id = await prompt_in_thread(
-                            cli_ui.ask_string, "Unable to find IMDB id, please enter e.g.(tt1234567) or press Enter to skip uploading to trackers requiring it:"
-                        )
+                        with webui_events.answer_buttons([("", "Skip trackers that need it")]):
+                            imdb_id = await prompt_in_thread(
+                                cli_ui.ask_string, "Unable to find IMDB id, please enter e.g.(tt1234567) or press Enter to skip uploading to trackers requiring it:"
+                            )
                     except EOFError:
                         logger.info("\n[red]Exiting on user request (Ctrl+C)[/red]")
                         await cleanup_manager.cleanup()
@@ -129,9 +141,10 @@ class TrackerStatusManager:
         ):
             meta.douban_id = await get_douban_id(meta)
 
-        async def process_single_tracker(tracker_name: str, shared_meta: Meta) -> tuple[str, dict[str, bool], str | None, Any]:
+        async def process_single_tracker(tracker_name: str, shared_meta: Meta) -> tuple[str, dict[str, Any], str | None, Any]:
+            """Check one isolated metadata copy and return its authoritative tracker result."""
             local_meta = copy.deepcopy(shared_meta)  # Ensure each task gets its own copy of meta
-            local_tracker_status = {"banned": False, "skipped": False, "dupe": False, "upload": False, "other": False, "skip_reason": ""}
+            local_tracker_status: dict[str, Any] = {"banned": False, "skipped": False, "dupe": False, "upload": False, "other": False, "skip_reason": ""}
             display_name = None
             tracker_class = None
 
@@ -190,14 +203,17 @@ class TrackerStatusManager:
                 if not local_tracker_status["banned"] and not local_tracker_status["skipped"]:
                     claimed = await tracker_setup.get_torrent_claims(local_meta, tracker_name)
                     local_tracker_status["skipped"] = bool(claimed)
-                    if claimed and not local_tracker_status["skip_reason"]:
-                        local_tracker_status["skip_reason"] = "release appears to be claimed/requested on this tracker (get_torrent_claims)"
+                    if claimed:
+                        local_tracker_status["status_message"] = local_meta.tracker_status[tracker_name].get("status_message") or "Claimed release found on this tracker"
+                        if not local_tracker_status["skip_reason"]:
+                            local_tracker_status["skip_reason"] = "release appears to be claimed/requested on this tracker (get_torrent_claims)"
 
                     if tracker_name not in {"PASSTHEPOPCORN"} and not local_tracker_status["skipped"]:
                         should_continue = await self._run_additional_checks(tracker_name, tracker_class, local_meta, helper)
                         if not should_continue:
                             local_tracker_status["skipped"] = True
                             local_tracker_status["skip_reason"] = "failed the tracker's content/eligibility pre-checks (get_additional_checks; see its messages above)"
+                            local_tracker_status["status_message"] = local_meta.tracker_status[tracker_name].get("status_message") or "Upload checks failed"
                             local_meta.skipping = tracker_name
 
                         if not local_tracker_status["skipped"]:
@@ -247,6 +263,7 @@ class TrackerStatusManager:
                         if not should_continue:
                             local_tracker_status["skipped"] = True
                             local_tracker_status["skip_reason"] = "failed the tracker's content/eligibility pre-checks (get_additional_checks; see its messages above)"
+                            local_tracker_status["status_message"] = local_meta.tracker_status[tracker_name].get("status_message") or "Upload checks failed"
                             local_meta.skipping = tracker_name
 
                         if not local_tracker_status["skipped"]:
@@ -350,8 +367,16 @@ class TrackerStatusManager:
         searching_trackers: list[str] = [name for name in meta.trackers if name in tracker_class_map]
         if searching_trackers:
             logger.info("[yellow]Searching for existing torrents on selected trackers...")
-        tasks = [process_single_tracker(tracker_name, meta) for tracker_name in meta.trackers]
-        results = await asyncio.gather(*tasks)
+
+        async def check_tracker(tracker_name: str) -> tuple[str, dict[str, Any], str | None, Any]:
+            """Finish discovery even when a tracker exits before duplicate review."""
+            try:
+                return await process_single_tracker(tracker_name, meta)
+            finally:
+                webui_events.dupe_review_ready(tracker_name, finished=True)
+
+        with webui_events.dupe_review_scope(meta.trackers):
+            results = await asyncio.gather(*(check_tracker(tracker_name) for tracker_name in meta.trackers))
 
         # Collect passed trackers and skip reasons
         passed_trackers: list[tuple[str, str | None, Any]] = []
@@ -370,13 +395,13 @@ class TrackerStatusManager:
                 passed_trackers.append((tracker_name, display_name, tracker_class))
 
         if skipped_trackers:
-            logger.info("[red]Skipped due to specific tracker conditions:[/red]")
+            logger.info("[red]Skipped due to specific tracker conditions:[/red]", extra={"ua_gui": False})
             for _skip_name in skipped_trackers:
                 _skip_status = tracker_status.get(_skip_name) or {}
                 _skip_reason = _skip_status.get("skip_reason") or "tracker-specific condition (see the messages above for the tracker's own note)"
-                logger.info(f"  [bold yellow]{_skip_name}[/bold yellow]: [red]{_skip_reason}[/red]")
+                logger.info(f"  [bold yellow]{_skip_name}[/bold yellow]: [red]{_skip_reason}[/red]", extra={"ua_gui": False})
         if dupe_trackers:
-            logger.info(f"[red]Found potential dupes on: [bold yellow]{', '.join(dupe_trackers)}[/bold yellow].\n")
+            logger.info(f"[red]Found potential dupes on: [bold yellow]{', '.join(dupe_trackers)}[/bold yellow].\n", extra={"ua_gui": False})
 
         # Now handle the confirmation/upload decisions
         if meta.unattended:
@@ -401,7 +426,14 @@ class TrackerStatusManager:
                     prompt_msg = "Upload to all?"
 
                 try:
-                    upload_all = await helper.prompt_yes_no(prompt_msg, default=False)
+                    with webui_events.prompt_context(
+                        kind="dupe_clear",
+                        clear_trackers=",".join(prompt_trackers),
+                        dupe_trackers=",".join(dupe_trackers),
+                        skipped_trackers=",".join(skipped_trackers),
+                        client_skipped_trackers=meta.client_skipped_trackers,
+                    ):
+                        upload_all = await helper.prompt_yes_no(prompt_msg, default=False)
                 except EOFError:
                     logger.info("\n[red]Exiting on user request (Ctrl+C)[/red]")
                     await cleanup_manager.cleanup()
@@ -440,6 +472,7 @@ class TrackerStatusManager:
             logger.debug("[bold red]DEBUG MODE does not upload to sites")
 
         meta.tracker_status = merge_tracker_status(tracker_status, status_map)
+        webui_events.publish_tracker_statuses(meta.tracker_status)
         return successful_trackers
 
 

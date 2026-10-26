@@ -3,7 +3,10 @@ import re
 from pathlib import Path
 from typing import Any, cast
 
-from src.console import logger
+import cli_ui
+
+from src.artwork import is_valid_cover_image
+from src.console import logger, prompt_in_thread
 from src.meta import Meta
 from src.trackers.common import Common
 from src.trackers.UNIT3D import UNIT3D
@@ -205,6 +208,10 @@ class Seedpool(UNIT3D):
 
     async def get_additional_checks(self, meta: Meta) -> bool:
         passed = True
+        if meta.category == "MUSIC" and not is_valid_cover_image(meta.artwork_path):
+            logger.info(f"{self.tracker}: [bold red]A cover image is required for music uploads at {self.tracker}.[/bold red]")
+            passed = False
+
         resolution = meta.resolution
         if meta.category in {"MOVIE", "TV"} and resolution not in ["8640p", "4320p", "2160p", "1440p", "1080p", "1080i"]:
             logger.info(f"{self.tracker}: [bold red]Only 1080 or higher resolutions allowed at {self.tracker}.[/bold red]")
@@ -221,6 +228,16 @@ class Seedpool(UNIT3D):
         if any(keyword.lower() in disallowed_keywords for keyword in keywords) or any(genre.lower() in disallowed_genres for genre in combined_genres):
             logger.info(f"{self.tracker}: [bold red]Porn/xxx is not allowed at {self.tracker}.[/bold red]")
             passed = False
+
+        # Album genres are sent as keywords; the IRC announce bot needs them.
+        if meta.category == "MUSIC" and not any(str(genre).strip() for genre in meta.genres):
+            logger.info(f"{self.tracker}: [bold red]Album genres are required in keywords for the {self.tracker} IRC announce.[/bold red]")
+            if not passed or (meta.unattended and not meta.unattended_confirm):
+                return False
+            user_genres = await prompt_in_thread(cli_ui.ask_string, "Enter the album genres, comma-separated", default="")
+            meta.genres = [genre.strip() for genre in str(user_genres or "").split(",") if genre.strip()]
+            if not meta.genres:
+                return False
 
         return passed
 

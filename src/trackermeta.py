@@ -12,6 +12,7 @@ import cli_ui
 import httpx
 from PIL import Image
 
+from src import webui_events
 from src.bbcode import BBCODE
 from src.btnid import BtnIdManager
 from src.console import buffer_console_logs, logger
@@ -480,7 +481,9 @@ async def update_metadata_from_tracker(
 
                         if not meta.skipit:
                             logger.info("[cyan]Do you want to edit, discard or keep the description?[/cyan]")
-                            edit_choice = cli_ui.ask_string("Enter 'e' to edit, 'd' to discard, or press Enter to keep it as is: ")
+                            question, buttons = webui_events.letter_prompt([("e", "edit"), ("d", "discard")], "keep it as is")
+                            with webui_events.answer_buttons(buttons):
+                                edit_choice = cli_ui.ask_string(question)
 
                             if (edit_choice or "").lower() == "e":
                                 edited_description = await edit_description(meta, description, tracker_name)
@@ -508,7 +511,9 @@ async def update_metadata_from_tracker(
                                 logger.info("[bold green]Successfully grabbed FraMeSToR description")
                                 logger.info(f"Description content:\n{nfo_content[:1000]}...", extra={"markup": False})
                                 logger.info("[cyan]Do you want to discard or keep the description?[/cyan]")
-                                edit_choice = cli_ui.ask_string("Enter 'd' to discard, or press Enter to keep it as is: ")
+                                question, buttons = webui_events.letter_prompt([("d", "discard")], "keep it as is")
+                                with webui_events.answer_buttons(buttons):
+                                    edit_choice = cli_ui.ask_string(question)
 
                                 if (edit_choice or "").lower() == "d":
                                     meta.description = ""
@@ -699,7 +704,9 @@ async def update_metadata_from_tracker(
                             logger.info("[bold green]Successfully grabbed description from HDBITS")
                             logger.info(f"HDBITS Description content:\n{description[:1000]}.....", extra={"markup": False})
                             logger.info("[cyan]Do you want to edit, discard or keep the description?[/cyan]")
-                            edit_choice_raw = cli_ui.ask_string("Enter 'e' to edit, 'd' to discard, or press Enter to keep it as is: ")
+                            question, buttons = webui_events.letter_prompt([("e", "edit"), ("d", "discard")], "keep it as is")
+                            with webui_events.answer_buttons(buttons):
+                                edit_choice_raw = cli_ui.ask_string(question)
                             edit_choice = (edit_choice_raw or "").strip().lower()
 
                             if edit_choice.lower() == "e":

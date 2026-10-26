@@ -144,7 +144,7 @@ def test_darkpeers_tv_year_rule_detects_a_distinct_exact_tmdb_title():
         ]
     }
 
-    with patch("src.trackers.UNIT3D.darkpeers.httpx.AsyncClient.get", new=AsyncMock(return_value=response)):
+    with patch("src.trackers.naming.httpx.AsyncClient.get", new=AsyncMock(return_value=response)):
         assert asyncio.run(adapter._tv_title_needs_year(meta)) is True
 
 
@@ -154,7 +154,7 @@ def test_darkpeers_tv_year_rule_does_not_count_the_only_tmdb_result_as_a_duplica
     response = Mock()
     response.json.return_value = {"results": [{"id": 424242, "name": "SHADOW LANTERN", "original_name": "SHADOW LANTERN"}]}
 
-    with patch("src.trackers.UNIT3D.darkpeers.httpx.AsyncClient.get", new=AsyncMock(return_value=response)):
+    with patch("src.trackers.naming.httpx.AsyncClient.get", new=AsyncMock(return_value=response)):
         assert asyncio.run(adapter._tv_title_needs_year(meta)) is False
 
 

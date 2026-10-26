@@ -102,6 +102,7 @@ class Meta:
     clean_name: str = ""
     cleanup: bool = False
     client: str | None = None
+    client_skipped_trackers: list[str] = field(default_factory=list)
     combined_genres: list[str] | str = field(default_factory=list)
     comic: bool = False
     content_duration_category: str = ""
@@ -486,6 +487,8 @@ class Meta:
     skip_upload_trackers: list[Any] = field(default_factory=list)
     skip_uploading: int | bool = False
     skipit: bool = False
+    # The user chose to skip this release at the confirmation prompt.
+    skipped_by_user: bool = False
     skipping: str | None = None
     sorted_filelist: bool = False
     source_size: int = 0
