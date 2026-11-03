@@ -44,6 +44,9 @@ TRACKER_STATUSES = frozenset({"pending", "success", "failed", "skipped", "dupe",
 MAX_TEXT_LENGTH = 1000
 MAX_LIST_ITEMS = 500
 MAX_EVENT_BYTES = 262144
+# The Web UI runs uploads unbuffered in a Windows pseudo console, which takes
+# only part of a write over 16 KB and drops the rest; events go out in pieces.
+STDOUT_WRITE_CHUNK = 4096
 MAX_CHECK_MESSAGES = 20
 # Local artwork the Web UI may serve as a queue item's cover thumbnail.
 ARTWORK_SUFFIXES = frozenset({".jpg", ".jpeg", ".png", ".webp"})
@@ -114,8 +117,10 @@ def _emit(kind: str, payload: Mapping[str, Any]) -> None:
         return
     if len(line) > MAX_EVENT_BYTES:
         return
+    text = f"\n{event_prefix(os.environ.get(GUI_EVENT_NONCE_ENV, ''))}{line}\n"
     with _stdout_lock, contextlib.suppress(Exception):
-        sys.stdout.write(f"\n{event_prefix(os.environ.get(GUI_EVENT_NONCE_ENV, ''))}{line}\n")
+        for start in range(0, len(text), STDOUT_WRITE_CHUNK):
+            sys.stdout.write(text[start : start + STDOUT_WRITE_CHUNK])
         sys.stdout.flush()
 
 
@@ -469,7 +474,7 @@ def _context_payload() -> dict[str, Any] | None:
     for name, value in context.items():
         if isinstance(value, Mapping):
             entries = list(cast(Mapping[Any, Any], value).items())[:MAX_LIST_ITEMS]
-            payload[name] = {plain_text(k, 64, markup=False): plain_text(v, 300, markup=False) for k, v in entries}
+            payload[name] = {plain_text(k, 64, markup=False): plain_text(v, MAX_TEXT_LENGTH if name == "summary" else 300, markup=False) for k, v in entries}
         elif isinstance(value, list):
             # Lists keep their order; (answer, label) pairs become two-item lists.
             items = cast(list[Any], value)[:MAX_LIST_ITEMS]
@@ -485,12 +490,16 @@ def _context_payload() -> dict[str, Any] | None:
         elif isinstance(value, bool):
             payload[name] = value
         elif value is not None:
-            payload[name] = plain_text(value, 300, markup=False)
+            payload[name] = plain_text(value, MAX_TEXT_LENGTH if name == "hint" else 300, markup=False)
     return payload
 
 
 def prompt_open(prompt_type: Literal["yes_no", "text", "choice", "multi_choice"], question: Any, *, choices: Iterable[Any] = (), default: Any = None) -> int | None:
     """Announce an interactive prompt and return its id for ``prompt_close``."""
+    from src.console import check_prompt_allowed
+
+    # A blocked question must not flash up in the Web UI before it is refused.
+    check_prompt_allowed()
     if not enabled():
         return None
     prompt_id = next(_prompt_ids)

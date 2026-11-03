@@ -3,10 +3,9 @@ import re
 from pathlib import Path
 from typing import Any, cast
 
-import cli_ui
-
 from src.artwork import is_valid_cover_image
-from src.console import logger, prompt_in_thread
+from src.console import logger
+from src.manual_input import Question, ask, confirm_override
 from src.meta import Meta
 from src.trackers.common import Common
 from src.trackers.UNIT3D import UNIT3D
@@ -186,6 +185,9 @@ class Seedpool(UNIT3D):
         return {"type_id": type_id.get(type_value, "17" if meta.category in {"BOOK", "GAME", "MUSIC"} else "0")}
 
     async def get_name(self, meta: Meta) -> dict[str, str]:
+        if meta.manual_name is not None:
+            return {"name": meta.manual_name.strip()}
+
         known_extensions = {".mkv", ".mp4", ".avi", ".ts"}
         source_name = meta.basename_no_ext or meta.uuid or meta.name
         if meta.category in {"MOVIE", "TV"} and not meta.is_disc and len(meta.filelist) == 1:
@@ -207,15 +209,15 @@ class Seedpool(UNIT3D):
         return {"name": name}
 
     async def get_additional_checks(self, meta: Meta) -> bool:
-        passed = True
         if meta.category == "MUSIC" and not is_valid_cover_image(meta.artwork_path):
             logger.info(f"{self.tracker}: [bold red]A cover image is required for music uploads at {self.tracker}.[/bold red]")
-            passed = False
+            return False
 
         resolution = meta.resolution
         if meta.category in {"MOVIE", "TV"} and resolution not in ["8640p", "4320p", "2160p", "1440p", "1080p", "1080i"]:
             logger.info(f"{self.tracker}: [bold red]Only 1080 or higher resolutions allowed at {self.tracker}.[/bold red]")
-            passed = False
+            if not await confirm_override(meta):
+                return False
 
         disallowed_keywords = {"xxx", "erotic", "porn"}
         disallowed_genres = {"adult", "erotica"}
@@ -227,19 +229,32 @@ class Seedpool(UNIT3D):
             combined_genres = [str(g) for g in cast(list[Any], combined_genres_val)]
         if any(keyword.lower() in disallowed_keywords for keyword in keywords) or any(genre.lower() in disallowed_genres for genre in combined_genres):
             logger.info(f"{self.tracker}: [bold red]Porn/xxx is not allowed at {self.tracker}.[/bold red]")
-            passed = False
+            if not await confirm_override(meta):
+                return False
 
         # Album genres are sent as keywords; the IRC announce bot needs them.
         if meta.category == "MUSIC" and not any(str(genre).strip() for genre in meta.genres):
             logger.info(f"{self.tracker}: [bold red]Album genres are required in keywords for the {self.tracker} IRC announce.[/bold red]")
-            if not passed or (meta.unattended and not meta.unattended_confirm):
+            genres = await ask(
+                meta,
+                Question(
+                    key="music.genres",
+                    kind="list",
+                    prompt=f"{self.tracker}: Enter the album genres, comma-separated (leave empty to skip this upload)",
+                    title="Album genres",
+                    hint=f"Required for the {self.tracker} IRC announce. Leaving it blank skips this upload.",
+                    placeholder="e.g. Rock, Jazz",
+                    summary={"Tracker": self.tracker, "Release": meta.name or meta.title, "Genres": ""},
+                    focus="Genres",
+                    tracker=self.tracker,
+                    unattended="fail",
+                ),
+            )
+            if not genres:
                 return False
-            user_genres = await prompt_in_thread(cli_ui.ask_string, "Enter the album genres, comma-separated", default="")
-            meta.genres = [genre.strip() for genre in str(user_genres or "").split(",") if genre.strip()]
-            if not meta.genres:
-                return False
+            meta.genres = genres
 
-        return passed
+        return True
 
     async def get_additional_data(self, meta: Meta) -> dict[str, Any]:
         return {

@@ -70,6 +70,7 @@ STATIC_AUTH_TYPES = {
     "1PTBA": "cookies",
     "AITHER": "unit3d_api",
     "ALPHARATIO": "cookies",
+    "AMIGOSSHARE": "cookies",
     "ANTHELION": "other_api",
     "ASIANCINEMA": "unit3d_api",
     "AVISTAZ": "cookies",
@@ -85,12 +86,16 @@ STATIC_AUTH_TYPES = {
     "CINEMATIK": "unit3d_api",
     "CINEMAZ": "cookies",
     "CURUPIRA": "other_api",
+    "CZTEAM": "other_api",
     "DARKPEERS": "unit3d_api",
     "DESITORRENTS": "unit3d_api",
     "DIGITALCORE": "other_api",
+    "DIRTYBYTES": "other_api",
     "DREADVAULT": "unit3d_api",
     "DRUNKENSLUG": "other_api",
     "EMUWAREZ": "unit3d_api",
+    "EXOTICAZ": "cookies",
+    "FILEIPLAY": "other_api",
     "FILELIST": "cookies",
     "FLOOD": "other_api",
     "FUNFILE": "cookies",
@@ -164,6 +169,7 @@ STATIC_AUTH_TYPES = {
     "XINGYUNGEPT": "cookies",
     "YUSCENE": "unit3d_api",
     "ZENITH": "unit3d_api",
+    "ZMPT": "cookies",
 }
 
 
@@ -533,6 +539,7 @@ class TrackerSetup:
                 except json.JSONDecodeError:
                     logger.info(f"[bold red]Failed to parse banned group file for '{tracker}'; using bundled list.")
 
+        banned_note = ""
         for tag in banned_group_list:
             if isinstance(tag, list):
                 tag_list = [str(item) for item in cast(list[Any], tag)]
@@ -542,6 +549,7 @@ class TrackerSetup:
                 if group_tags == tag_name.lower():
                     logger.info(f"[bold yellow]{meta.tag[1:]}[/bold yellow][bold red] was found on [bold yellow]{tracker}'s[/bold yellow] list of banned groups.")
                     if len(tag_list) > 1:
+                        banned_note = tag_list[1]
                         logger.info(f"[bold red]NOTE: [bold yellow]{tag_list[1]}")
                     result = True
             else:
@@ -555,10 +563,15 @@ class TrackerSetup:
                 # Trackers are checked concurrently: ask through the caller's shared prompt lock.
                 question = f"{tracker}: {meta.tag[1:]} is a banned group. Do you want to continue anyway?"
                 try:
-                    if prompt_yes_no is not None:
-                        proceed = await prompt_yes_no(question, default=False)
-                    else:
-                        proceed = await prompt_in_thread(cli_ui.ask_yes_no, question, default=False)
+                    with webui_events.field_prompt(
+                        "Banned release group",
+                        {"Tracker": tracker, "Release group": meta.tag[1:], "Note": banned_note},
+                        hint=f"{meta.tag[1:]} was found on {tracker}'s list of banned groups.",
+                    ):
+                        if prompt_yes_no is not None:
+                            proceed = await prompt_yes_no(question, default=False)
+                        else:
+                            proceed = await prompt_in_thread(cli_ui.ask_yes_no, question, default=False)
                     if proceed:
                         return False
                 except EOFError:
@@ -885,7 +898,7 @@ class TrackerSetup:
             try:
                 url = tracker_instance.requests_url
             except AttributeError:
-                if tracker_name.upper() not in ("BJSHARE", "FUNFILE", "HDSPACE", "AVISTAZ", "CINEMAZ", "PRIVATEHD"):
+                if tracker_name.upper() not in ("AMIGOSSHARE", "BJSHARE", "FUNFILE", "HDSPACE", "AVISTAZ", "CINEMAZ", "PRIVATEHD"):
                     # tracker without requests url not supported
                     return False
 
@@ -893,7 +906,7 @@ class TrackerSetup:
                 if not url:
                     return False
                 requests = await self.bhd_request_check(meta, tracker_name, url)
-            elif tracker_name.upper() in ("BJSHARE", "FUNFILE", "HDSPACE", "AVISTAZ", "CINEMAZ", "PRIVATEHD", "MTEAM", "ORPHEUS"):
+            elif tracker_name.upper() in ("AMIGOSSHARE", "BJSHARE", "FUNFILE", "HDSPACE", "AVISTAZ", "CINEMAZ", "PRIVATEHD", "MTEAM", "ORPHEUS"):
                 # These trackers have custom request handling
                 requests = cast(list[JsonDict], await tracker_instance.get_requests(meta))
                 for request in requests or []:
@@ -1225,7 +1238,18 @@ class TrackerSetup:
                 else:
                     logger.info("  [yellow]The trumping torrent for this report seems to be in modq.....[/yellow]")
             try:
-                upload = cli_ui.ask_yes_no("Do you want to proceed with the upload anyway?", default=False)
+                report_summary: dict[str, Any] = {"Tracker": tracker}
+                for report in trumping_reports:
+                    trumping_names = ", ".join(str(t.get("name", "Unknown")) for t in (report.get("trumping_torrent") or []))
+                    report_summary[f"Report {report.get('id')}"] = (
+                        f"{report.get('title') or ''} (trumped by: {trumping_names})" if trumping_names else str(report.get("title") or "In moderation queue")
+                    )
+                with webui_events.field_prompt(
+                    "Existing trump reports",
+                    report_summary,
+                    hint=f"Found {len(trumping_reports)} existing trumping report(s) on {tracker} for this release.",
+                ):
+                    upload = cli_ui.ask_yes_no("Do you want to proceed with the upload anyway?", default=False)
             except EOFError, KeyboardInterrupt:
                 logger.info("[yellow]Prompt cancelled; treating as 'no' for safety.[/yellow]")
                 upload = False
@@ -1242,7 +1266,12 @@ class TrackerSetup:
         if not meta.tv_pack:
             logger.info(f"[yellow]{tracker} requires comparisons to be provided for trump reports.\nAre the comparison images in the description or are you adding links?")
             try:
-                with webui_events.answer_buttons([("d", "In the description"), ("L", "Paste links"), ("", "Skip trumping")]):
+                with webui_events.field_prompt(
+                    "Trump report comparison",
+                    {"Tracker": tracker, "Release": meta.name or meta.title},
+                    hint=f"{tracker} requires comparisons to be provided for trump reports. Are the comparison images in the description or are you adding links?",
+                    actions=[("d", "In the description"), ("L", "Paste links"), ("", "Skip trumping")],
+                ):
                     where_compare = cli_ui.ask_string("Enter 'd' if in description, 'L' if you want to paste links, or press Enter to skip trumping:", default="")
             except EOFError, KeyboardInterrupt:
                 logger.info("[yellow]Prompt cancelled; skipping trump report creation.[/yellow]")
@@ -1254,8 +1283,22 @@ class TrackerSetup:
                 return True
             if where_compare.upper() == "L":
                 try:
-                    reported_screenshots = cli_ui.ask_string("Paste screenshot links for the reported torrent (comma-separated):", default="")
-                    trumping_screenshots = cli_ui.ask_string("Paste screenshot links for the trumping torrent (comma-separated):", default="")
+                    with webui_events.field_prompt(
+                        "Trump report comparison",
+                        {"Tracker": tracker, "Reported torrent": ""},
+                        focus="Reported torrent",
+                        hint="Comma-separated screenshot links. Leaving it blank skips the trump report.",
+                        actions=[("", "Skip trumping")],
+                    ):
+                        reported_screenshots = cli_ui.ask_string("Paste screenshot links for the reported torrent (comma-separated):", default="")
+                    with webui_events.field_prompt(
+                        "Trump report comparison",
+                        {"Tracker": tracker, "Reported torrent": reported_screenshots, "Trumping torrent": ""},
+                        focus="Trumping torrent",
+                        hint="Comma-separated screenshot links. Leaving it blank skips the trump report.",
+                        actions=[("", "Skip trumping")],
+                    ):
+                        trumping_screenshots = cli_ui.ask_string("Paste screenshot links for the trumping torrent (comma-separated):", default="")
                 except EOFError, KeyboardInterrupt:
                     logger.info("[yellow]Prompt cancelled; skipping trump report creation.[/yellow]")
                     return False
@@ -1499,6 +1542,7 @@ tracker_class_map: Any = LazyTrackerDict(
         "1PTBA": ("src.trackers.NEXUSPHP.oneptba", "OnePTBA"),
         "AITHER": ("src.trackers.UNIT3D.aither", "Aither"),
         "ALPHARATIO": ("src.trackers.GAZELLE.alpharatio", "AlphaRatio"),
+        "AMIGOSSHARE": ("src.trackers.amigosshare", "AmigosShare"),
         "ANTHELION": ("src.trackers.GAZELLE.anthelion", "Anthelion"),
         "ASIANCINEMA": ("src.trackers.UNIT3D.asiancinema", "AsianCinema"),
         "AVISTAZ": ("src.trackers.AVISTAZ.avistaz", "AvistaZ"),
@@ -1514,12 +1558,16 @@ tracker_class_map: Any = LazyTrackerDict(
         "CINEMATIK": ("src.trackers.UNIT3D.cinematik", "Cinematik"),
         "CINEMAZ": ("src.trackers.AVISTAZ.cinemaz", "CinemaZ"),
         "CURUPIRA": ("src.trackers.USENET.curupira", "Curupira"),
+        "CZTEAM": ("src.trackers.czteam", "CZTeam"),
         "DARKPEERS": ("src.trackers.UNIT3D.darkpeers", "DarkPeers"),
         "DESITORRENTS": ("src.trackers.UNIT3D.torrentdesi", "DesiTorrents"),
         "DIGITALCORE": ("src.trackers.digitalcore", "DigitalCore"),
+        "DIRTYBYTES": ("src.trackers.dirtybytes", "DirtyBytes"),
         "DREADVAULT": ("src.trackers.UNIT3D.dreadvault", "DreadVault"),
         "DRUNKENSLUG": ("src.trackers.USENET.drunkenslug", "DrunkenSlug"),
         "EMUWAREZ": ("src.trackers.UNIT3D.emuwarez", "Emuwarez"),
+        "EXOTICAZ": ("src.trackers.AVISTAZ.exoticaz", "ExoticaZ"),
+        "FILEIPLAY": ("src.trackers.fileiplay", "FileIPlay"),
         "FILELIST": ("src.trackers.filelist", "FileList"),
         "FLOOD": ("src.trackers.flood", "Flood"),
         "FUNFILE": ("src.trackers.funfile", "FunFile"),
@@ -1593,6 +1641,7 @@ tracker_class_map: Any = LazyTrackerDict(
         "XINGYUNGEPT": ("src.trackers.NEXUSPHP.xingyungept", "XingyungePT"),
         "YUSCENE": ("src.trackers.UNIT3D.yuscene", "YUSCENE"),
         "ZENITH": ("src.trackers.UNIT3D.zenith", "Zenith"),
+        "ZMPT": ("src.trackers.NEXUSPHP.zmpt", "ZmPT"),
     }
 )
 

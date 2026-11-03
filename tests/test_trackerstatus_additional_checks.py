@@ -1,10 +1,9 @@
-import ast
-from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 import pytest
 
-from src import trackerstatus
+from src import manual_input, trackerstatus
 from src.meta import Meta
 
 
@@ -99,36 +98,37 @@ async def test_failed_additional_check_prompts_in_unattended_confirm_mode(monkey
     assert helper.prompted is True  # noqa: S101
 
 
-# Per-tracker code that TrackerStatusManager runs concurrently for every selected tracker.
-_CONCURRENT_CHECKS = {"get_additional_checks", "check_banned_group"}
+@pytest.mark.asyncio
+async def test_check_that_was_declined_is_not_asked_again(monkeypatch: pytest.MonkeyPatch) -> None:
+    helper = _Helper()
+    monkeypatch.setattr(trackerstatus, "UploadHelper", lambda _config: helper)
+    monkeypatch.setattr(trackerstatus.sys, "stdin", SimpleNamespace(closed=False, isatty=lambda: False))
+    monkeypatch.setattr(manual_input, "prompt_in_thread", AsyncMock(return_value=False))
+
+    async def check(meta: Meta) -> bool:
+        return await manual_input.confirm_override(meta)
+
+    meta = Meta()
+    result = await trackerstatus.TrackerStatusManager({})._run_additional_checks("TEST", SimpleNamespace(get_additional_checks=check), meta, helper)
+
+    assert result is False  # noqa: S101
+    assert helper.prompted is False  # noqa: S101
 
 
-def _additional_check_functions() -> list[tuple[str, ast.AsyncFunctionDef | ast.FunctionDef]]:
-    checks = []
-    for path in [*sorted(Path("src/trackers").rglob("*.py")), Path("src/trackersetup.py")]:
-        checks.extend(
-            (f"{path}:{node.lineno}", node)
-            for node in ast.walk(ast.parse(path.read_text(encoding="utf-8")))
-            if isinstance(node, (ast.AsyncFunctionDef, ast.FunctionDef)) and node.name in _CONCURRENT_CHECKS
-        )
-    return checks
+@pytest.mark.asyncio
+async def test_hard_failure_after_an_accepted_override_is_still_asked(monkeypatch: pytest.MonkeyPatch) -> None:
+    helper = _Helper()
+    monkeypatch.setattr(trackerstatus, "UploadHelper", lambda _config: helper)
+    monkeypatch.setattr(trackerstatus.sys, "stdin", SimpleNamespace(closed=False, isatty=lambda: False))
+    monkeypatch.setattr(manual_input, "prompt_in_thread", AsyncMock(return_value=True))
 
+    async def check(meta: Meta) -> bool:
+        await manual_input.confirm_override(meta)
+        return False
 
-def test_tracker_checks_do_not_ask_their_own_override_question() -> None:
-    """Trackers are checked concurrently; a check may not block stdin, and only the status manager asks "upload anyway?"."""
-    offenders = []
-    for location, func in _additional_check_functions():
-        for node in ast.walk(func):
-            blocking_prompt = (
-                isinstance(node, ast.Call)
-                and isinstance(node.func, ast.Attribute)
-                and isinstance(node.func.value, ast.Name)
-                and node.func.value.id == "cli_ui"
-                and node.func.attr.startswith("ask_")
-            )
-            override_question = func.name == "get_additional_checks" and isinstance(node, ast.Constant) and isinstance(node.value, str) and "anyway?" in node.value
-            if blocking_prompt or override_question:
-                offenders.append(f"{location} line {node.lineno}")
+    # A decline left over from an earlier check of this release must not suppress the question.
+    meta = Meta(override_declined=True)
+    result = await trackerstatus.TrackerStatusManager({})._run_additional_checks("TEST", SimpleNamespace(get_additional_checks=check), meta, helper)
 
-    assert {func.name for _, func in _additional_check_functions()} == _CONCURRENT_CHECKS  # noqa: S101
-    assert offenders == []  # noqa: S101
+    assert result is True  # noqa: S101
+    assert helper.prompted is True  # noqa: S101

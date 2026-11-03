@@ -16,7 +16,7 @@ from langcodes import Language
 from rich.progress import BarColumn, TaskProgressColumn, TextColumn
 
 from bin.get_playlist import MplsParser
-from src import webui_events
+from src import language_names, webui_events
 from src.binaries import configured_binary
 from src.console import console, logger, progress_display, prompt_in_thread
 from src.mediainfo import MediaInfo
@@ -280,7 +280,14 @@ class DiscParse:
 
                             logger.info("[bold yellow]Enter playlist numbers separated by commas, 'ALL' to select all, or press Enter to select the top-scoring playlist:")
                             labels = [f"{playlist['file']} · score {self._calculate_playlist_score(playlist):.2f}" for playlist in top_playlists]
-                            with webui_events.numbered_options(labels, actions=[("ALL", "All playlists"), ("", "Top-scoring playlist")], start=0):
+                            details = [
+                                {
+                                    "meta": f"{int(playlist['duration'] // 3600)}h {int((playlist['duration'] % 3600) // 60)}m {int(playlist['duration'] % 60)}s · score {self._calculate_playlist_score(playlist):.2f}",
+                                    "text": ", ".join(f"{Path(item['file']).name} ({item['size'] // (1024 * 1024)} MB)" for item in playlist["items"]),
+                                }
+                                for playlist in top_playlists
+                            ]
+                            with webui_events.numbered_options(labels, actions=[("ALL", "All playlists"), ("", "Top-scoring playlist")], start=0, details=details):
                                 user_input_raw = await prompt_in_thread(cli_ui.ask_string, "Select playlists: ")
                             user_input = (user_input_raw or "").strip().lower()
 
@@ -404,7 +411,14 @@ class DiscParse:
 
                                 if not meta.unattended or (meta.unattended and meta.unattended_confirm):
                                     logger.info("[bold green]You can create a custom Edition for this playlist.")
-                                    with webui_events.answer_buttons([("", "Keep the current label")]):
+                                    with webui_events.field_prompt(
+                                        "Playlist edition",
+                                        {"Playlist": playlist["file"], "Current label": current_label, "Edition": ""},
+                                        focus="Edition",
+                                        hint="Optional custom edition title for this playlist. Leave it blank to keep the current label.",
+                                        actions=[("", "Keep the current label")],
+                                        placeholder=str(current_label),
+                                    ):
                                         user_input_raw = await prompt_in_thread(
                                             cli_ui.ask_string, f"Enter a new Edition title for playlist {playlist['file']} (or press Enter to keep the current label): "
                                         )
@@ -729,7 +743,21 @@ class DiscParse:
                             f"Playlist {playlist.get('titleNumber', '')} · {playlist.get('titleDuration', 'Unknown')} · {playlist.get('totalSize', 0) / (1024 * 1024):.2f} MB"
                             for playlist in valid_playlists
                         ]
-                        with webui_events.numbered_options(labels):
+                        details = [
+                            {
+                                "meta": " · ".join(
+                                    part
+                                    for part in (
+                                        f"ID: {playlist['id']}" if playlist.get("id") else "",
+                                        f"Size: {playlist.get('totalSize', 0) / (1024 * 1024):.2f} MB",
+                                    )
+                                    if part
+                                ),
+                                "text": str(playlist.get("description") or ""),
+                            }
+                            for playlist in valid_playlists
+                        ]
+                        with webui_events.numbered_options(labels, details=details):
                             user_input_raw = await prompt_in_thread(cli_ui.ask_string, "Enter the number of the playlist you want to select: ")
                         user_input = (user_input_raw or "").strip()
 
@@ -1020,7 +1048,7 @@ class DiscParse:
                     # Extract the 2-letter language code before the colon
                     langcode_short = langcode.split(":")[0] if ":" in langcode else langcode
                     # Convert the short language code to the full language name
-                    language_name = Language.get(langcode_short).display_name()
+                    language_name = language_names.display_name(Language.get(langcode_short))
 
                     cast(list[dict[str, Any]], title_data["audioTracks"]).append(
                         {
@@ -1037,7 +1065,7 @@ class DiscParse:
                     # Extract the 2-letter language code before the colon
                     langcode_short = langcode.split(":")[0] if ":" in langcode else langcode
                     # Convert the short language code to the full language name
-                    language_name = Language.get(langcode_short).display_name()
+                    language_name = language_names.display_name(Language.get(langcode_short))
 
                     cast(list[dict[str, Any]], title_data["subtitleTracks"]).append(
                         {

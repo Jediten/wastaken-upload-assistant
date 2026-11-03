@@ -1,7 +1,5 @@
 # Upload Assistant © 2025 Audionut & wastaken7 — Licensed under UAPL v1.0
-import asyncio
 import contextlib
-import contextvars
 import json
 import re
 import sys
@@ -14,19 +12,18 @@ import aiofiles
 import cli_ui
 from rich.markup import escape
 
-from src import confirm_options, webui_events
+from src import confirm_options, payload_preview, webui_events
 from src.audible import resolve_audible_url
 from src.bdinfo_comparator import compare_bdinfo, has_bdinfo_content
 from src.cleanup import cleanup_manager
 from src.cogs.redaction import Redaction
 from src.config_helpers import format_terminal_link
-from src.console import logger, prompt_in_thread
+from src.console import PromptBlockedError, logger, prompt_in_thread, prompts_blocked
+from src.manual_input import prompt_session
 from src.meta import Meta
 from src.prompt_sound import play_prompt_sound
 from src.slot_rules.models import SlotDecision, Verdict
 from src.trackersetup import tracker_class_map
-
-_dupe_prompt_lock_held = contextvars.ContextVar("dupe_prompt_lock_held", default=False)
 
 DupeEntry = dict[str, Any]
 
@@ -279,14 +276,40 @@ class UploadHelper:
         if not isinstance(self.default_config, dict):
             raise ValueError("'DEFAULT' config section must be a dict")
         self.tracker_class_map = cast(Mapping[str, Any], tracker_class_map)
-        self._prompt_lock = asyncio.Lock()
 
     async def prompt_yes_no(self, question: str, *, default: bool = False) -> bool:
         """Ask one interactive question at a time without blocking the event loop."""
-        if _dupe_prompt_lock_held.get():
+        async with prompt_session():
             return await prompt_in_thread(cli_ui.ask_yes_no, question, default=default)
-        async with self._prompt_lock:
-            return await prompt_in_thread(cli_ui.ask_yes_no, question, default=default)
+
+    @staticmethod
+    async def _payload_preview(tracker_class: Any, tracker_name: str, meta: Meta) -> payload_preview.TrackerPreview | None:
+        """Build a tracker's upload form preview; a failure only hides it from the prompt."""
+        build = getattr(tracker_class, "get_payload_preview", None)
+        if build is None:
+            return None
+        # Some form getters read the tracker's status entry, which the tracker checks create later.
+        # What they write there while previewing is undone; the upload writes it again.
+        status = meta.tracker_status.setdefault(tracker_name, {})
+        saved_status = dict(status) if status else None
+        try:
+            # A tracker that would ask a question here keeps asking it later, as before.
+            with prompts_blocked():
+                preview = await build(meta)
+        except (Exception, PromptBlockedError) as e:
+            logger.debug(f"{tracker_name}: upload data preview unavailable: {e!r}")
+            return None
+        finally:
+            if saved_status is None:
+                meta.tracker_status.pop(tracker_name, None)
+            else:
+                status.clear()
+                status.update(saved_status)
+                meta.tracker_status[tracker_name] = status
+        if not isinstance(preview, payload_preview.TrackerPreview):
+            return None
+        preview.tracker = tracker_name
+        return preview
 
     async def _ask_confirmation(self, question: str) -> tuple[bool, dict[str, Any]]:
         """Ask a yes/no question whose GUI answer may carry run option values."""
@@ -303,7 +326,7 @@ class UploadHelper:
             finally:
                 webui_events.prompt_close(prompt_id)
 
-        async with self._prompt_lock:
+        async with prompt_session():
             return await prompt_in_thread(ask)
 
     async def dupe_check(self, dupes: list[DupeEntry | str], meta: Meta, tracker_name: str, slot_decision: SlotDecision | None = None) -> tuple[bool, Meta]:
@@ -322,13 +345,9 @@ class UploadHelper:
             if not dupes and slot_decision is not None:
                 needs_review = meta.dupe is False and (slot_decision.verdict is Verdict.BLOCK or (slot_decision.verdict is Verdict.REVIEW and bool(slot_decision.conflicts)))
             webui_events.dupe_review_ready(tracker_name, needs_review=bool(interactive and needs_review))
-        async with self._prompt_lock:
-            token = _dupe_prompt_lock_held.set(True)
-            try:
-                with webui_events.prompt_context(kind="dupes", tracker=tracker_name):
-                    return await self._dupe_check(dupes, meta, tracker_name, slot_decision, tracker_class=prepared_tracker)
-            finally:
-                _dupe_prompt_lock_held.reset(token)
+        async with prompt_session():
+            with webui_events.prompt_context(kind="dupes", tracker=tracker_name):
+                return await self._dupe_check(dupes, meta, tracker_name, slot_decision, tracker_class=prepared_tracker)
 
     def _show_slot_decision(self, decision: SlotDecision, meta: Meta) -> None:
         """Print a tracker's slot recommendation as a small, readable box."""
@@ -555,7 +574,8 @@ class UploadHelper:
 
                 trumpable_text = _format_dupe(selected_match)
                 logger.info("[bold red]Trumpable found based on episode matching![/bold red]", extra={"ua_gui": False})
-                webui_events.dupes(tracker_name, [selected_match], source_size=meta.source_size, trumpable=True)
+                match_note = f"No release found with matching tag '{meta.tag}'. Selected release may be from a different group." if user_tag and not tag_matched else None
+                webui_events.dupes(tracker_name, [selected_match], source_size=meta.source_size, trumpable=True, note=match_note)
 
                 if user_tag and not tag_matched:
                     logger.info(f"[yellow]Note: No release found with matching tag '{meta.tag}'. Selected release may be from a different group.[/yellow]")
@@ -603,7 +623,11 @@ class UploadHelper:
             if not meta.were_trumping:
                 if meta.filename_match and meta.file_count_match:
                     logger.info(f"[bold red]Exact match found! - {meta.filename_match}[/bold red]", extra={"ua_gui": False})
-                    webui_events.notice("attention", f"Exact match already on the site: {meta.filename_match}", tracker=tracker_name)
+                    exact_dupes = [entry for entry in dupes_list if isinstance(entry, dict) and f"{entry.get('name')} = {entry.get('link', None)}" == meta.filename_match]
+                    exact_note = "Exact match: this release is already on the site."
+                    if tracker_name in ["AITHER", "LST"]:
+                        exact_note += f" {tracker_name} supports automatic trumping of exact matches, if the file is allowed to be trumped."
+                    webui_events.dupes(tracker_name, exact_dupes or dupes_list, source_size=meta.source_size, note=exact_note)
                     try:
                         if tracker_name in ["AITHER", "LST"]:
                             logger.info(f"[yellow]{tracker_name} supports automatic trumping of exact matches, if the file is allowed to be trumped.[/yellow]")
@@ -755,14 +779,20 @@ class UploadHelper:
             if warnings:
                 logger.info("")
                 logger.info("\n\n".join(warnings))
+                for warning_message in warnings:
+                    webui_events.notice("attention", warning_message, tracker=tracker_name)
 
             if results:
                 logger.info("")
                 logger.info("\n".join(results))
                 logger.info("")
+                for results_message in results:
+                    webui_events.notice("attention", results_message, tracker=tracker_name)
 
     async def get_confirmation(self, meta: Meta) -> bool:
         """Publish resolved release flags and review metadata before continuing."""
+        # Changes from an earlier answer would no longer match this release's previews.
+        meta.payload_edits = {}
         webui_events.update_item(personal_release=meta.personalrelease is True, run_options=meta, artwork=meta)
         confirm: bool = False
         lines: list[str | tuple[str, str]] = []
@@ -983,15 +1013,22 @@ class UploadHelper:
             meta.keep_folder = False
 
         if meta.keep_folder and meta.isdir:
-            kf_confirm = await self.prompt_yes_no(
-                "You specified --keep-folder. Uploading in folders might not be allowed. Proceed?",
-                default=False,
-            )
+            with webui_events.field_prompt(
+                "Folder upload",
+                {"Release": meta.name or meta.title, "Path": meta.path},
+                hint="You specified --keep-folder. Uploading single files in folders might not be allowed.",
+            ):
+                kf_confirm = await self.prompt_yes_no(
+                    "You specified --keep-folder. Uploading in folders might not be allowed. Proceed?",
+                    default=False,
+                )
             if not kf_confirm:
                 logger.info("[bold red]Aborting...[/bold red]")
                 exit()
         tracker_release_names: dict[str, str] = {}
         modq_enabled_in_config_trackers: list[str] = []
+        payload_previews: dict[str, payload_preview.TrackerPreview] = {}
+        unavailable_previews: list[str] = []
         for tracker_name in meta.trackers:
             if tracker_name in ("MANUAL", "USENET"):
                 continue
@@ -1000,8 +1037,15 @@ class UploadHelper:
                 if not tracker_class_factory:
                     continue
                 tracker_class = tracker_class_factory(config=self.config)
+                # The GUI shows each tracker's upload form; it includes the name, so
+                # get_name (which may ask a question) is not run a second time.
+                preview = await self._payload_preview(tracker_class, tracker_name, meta) if webui_events.enabled() else None
+                if preview is not None:
+                    payload_previews[tracker_name] = preview
+                elif webui_events.enabled() and hasattr(tracker_class, "get_payload_preview"):
+                    unavailable_previews.append(tracker_name)
                 try:
-                    tracker_rename = await tracker_class.get_name(meta)
+                    tracker_rename = preview.name if preview is not None and preview.name else await tracker_class.get_name(meta)
                     if isinstance(tracker_rename, dict) and len(tracker_rename) == 1:
                         tracker_rename = str(next(iter(tracker_rename.values())))
                 except Exception as e:
@@ -1039,15 +1083,28 @@ class UploadHelper:
             logger.info(f"[bold]Base Name:[/bold] {meta.name}\n", extra={"highlighter": None})
 
         run_options = confirm_options.available(meta, self.config) if webui_events.enabled() else []
-        with webui_events.prompt_context(kind="confirm", base_name=meta.name, release_names=tracker_release_names, debug=bool(meta.debug), run_options=run_options):
-            confirm, option_values = await self._ask_confirmation("Is this correct?") if run_options else (await self.prompt_yes_no("Is this correct?"), {})
+        payloads, payload_choices, payload_notice = payload_preview.gui_payloads(payload_previews.values())
+        context: dict[str, Any] = {"payloads": payloads, "payload_choices": payload_choices} if payloads else {}
+        if unavailable_previews:
+            # Say which trackers are missing instead of leaving them out silently.
+            missing = f"No upload data to show for {', '.join(unavailable_previews)}; it is built at upload time."
+            payload_notice = f"{payload_notice} {missing}".strip()
+        if payload_notice:
+            context["payload_notice"] = payload_notice
+        with webui_events.prompt_context(kind="confirm", base_name=meta.name, release_names=tracker_release_names, debug=bool(meta.debug), run_options=run_options, **context):
+            confirm, option_values = await self._ask_confirmation("Is this correct?") if run_options or payloads else (await self.prompt_yes_no("Is this correct?"), {})
         logger.info("")
 
+        payload_edits = option_values.pop("payload_edits", None)
         if confirm and option_values:
             changed = confirm_options.apply(meta, run_options, option_values)
             if changed:
                 logger.info(f"[green]Options changed in the Web UI:[/green] {escape(', '.join(changed))}")
                 webui_events.update_item(personal_release=meta.personalrelease is True, run_options=meta)
+        if confirm and payload_edits:
+            # Applied at upload time, after the options above, so they win for that tracker.
+            for change in payload_preview.accept_edits(meta, payload_previews, payload_edits):
+                logger.info(f"[green]Upload data changed in the Web UI:[/green] {escape(change)}", extra={"highlighter": None})
 
         if confirm:
             if (

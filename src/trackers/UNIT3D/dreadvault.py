@@ -4,6 +4,7 @@ from typing import Any, cast
 
 from src.console import logger
 from src.languages import languages_manager
+from src.manual_input import confirm_override
 from src.meta import Meta
 from src.trackers.common import Common
 from src.trackers.UNIT3D import UNIT3D
@@ -94,6 +95,9 @@ class DreadVault(UNIT3D):
         self.common = Common(config)
 
     async def get_name(self, meta: Meta) -> dict[str, str]:
+        if meta.manual_name is not None:
+            return {"name": meta.manual_name.strip()}
+
         dreadvault_name: str = meta.name
         resolution: str = meta.resolution if meta.resolution != "OTHER" else ""
         video_encode: str = meta.video_encode
@@ -200,7 +204,6 @@ class DreadVault(UNIT3D):
         return {"name": " ".join(dreadvault_name.split())}
 
     async def get_additional_checks(self, meta: Meta) -> bool:
-        passed = True
         combined_genres_value = meta.combined_genres
         if isinstance(combined_genres_value, list):
             combined_genres = cast(list[str], combined_genres_value)
@@ -211,13 +214,15 @@ class DreadVault(UNIT3D):
         searchable = {term.lower() for term in [*combined_genres, *meta.keywords]}
         if not any("horror" in term for term in searchable):
             logger.info(f"{self.tracker}: [bold red]Only horror content is allowed at {self.tracker}.[/bold red]")
-            passed = False
+            if not await confirm_override(meta):
+                return False
 
         genres = ", ".join([*meta.keywords, *combined_genres])
         # only terms that never appear as TMDB keywords on legitimate horror
         adult_keywords = ["xxx", "porn", "adult", "hentai", "softcore"]
         if any(re.search(rf"(^|,\s*){re.escape(keyword)}(\s*,|$)", genres, re.IGNORECASE) for keyword in adult_keywords):
             logger.info(f"{self.tracker}: [bold red]Porn/xxx is not allowed at {self.tracker}.[/bold red]")
-            passed = False
+            if not await confirm_override(meta):
+                return False
 
-        return self.common.check_and_confirm_adult_media_upload(meta, self.tracker) and passed
+        return await self.common.check_and_confirm_adult_media_upload(meta, self.tracker)

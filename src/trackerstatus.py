@@ -42,21 +42,21 @@ class TrackerStatusManager:
 
         Tracker checks deliberately remain responsible for validating tracker rules
         and explaining failures.  The upload decision belongs here so every
-        tracker gets the same attended/unattended behaviour.  Checks must not ask
-        their own "upload anyway?" question: trackers are checked concurrently, so
-        a second prompt races this one for stdin and the user is asked twice.
+        tracker gets the same attended/unattended behaviour.
         """
         check = getattr(tracker, "get_additional_checks", None)
         if check is None:
             return True
 
+        meta.override_declined = False
         with webui_events.capture_tracker_checks(tracker_name, logger) as messages:
             result = await check(meta) if inspect.iscoroutinefunction(check) else check(meta)
         if result:
             return True
 
+        # A check that asked its own "upload anyway?" and got a no is not asked again.
         # -uac (unattended confirm) still asks; plain unattended runs never do.
-        if (not meta.get("unattended", False) or meta.get("unattended_confirm", False)) and not sys.stdin.closed:
+        if not meta.override_declined and (not meta.get("unattended", False) or meta.get("unattended_confirm", False)) and not sys.stdin.closed:
             try:
                 with webui_events.prompt_context(
                     tracker=tracker_name,
@@ -95,7 +95,14 @@ class TrackerStatusManager:
             if needs_imdb:
                 while True:
                     try:
-                        with webui_events.answer_buttons([("", "Skip trackers that need it")]):
+                        with webui_events.field_prompt(
+                            "IMDb ID",
+                            {"Release": meta.get("name") or meta.get("title"), "Required by": "PASSTHEPOPCORN", "IMDb ID": ""},
+                            focus="IMDb ID",
+                            hint="Enter an IMDb ID as tt1234567. Leaving it blank skips trackers that require it.",
+                            actions=[("", "Skip trackers that need it")],
+                            placeholder="tt1234567",
+                        ):
                             imdb_id = await prompt_in_thread(
                                 cli_ui.ask_string, "Unable to find IMDB id, please enter e.g.(tt1234567) or press Enter to skip uploading to trackers requiring it:"
                             )
@@ -137,6 +144,7 @@ class TrackerStatusManager:
                 "QINGWA",
                 "RAILGUNPT",
                 "XINGYUNGEPT",
+                "ZMPT",
             ]
         ):
             meta.douban_id = await get_douban_id(meta)
@@ -239,9 +247,15 @@ class TrackerStatusManager:
                                     dupes = []
                                 else:
                                     try:
-                                        if await helper.prompt_yes_no(
-                                            f"Duplicate check failed on {tracker_name}. Do you want to proceed with the upload anyway?", default=False
+                                        with webui_events.prompt_context(
+                                            kind="tracker_checks",
+                                            tracker=tracker_name,
+                                            check_messages=[f"Error searching for duplicates on {tracker_name}: {e}"],
                                         ):
+                                            proceed_after_error = await helper.prompt_yes_no(
+                                                f"Duplicate check failed on {tracker_name}. Do you want to proceed with the upload anyway?", default=False
+                                            )
+                                        if proceed_after_error:
                                             dupes = []
                                             # set trackers here so that they are not double checked later with cross seeding
                                             async with meta_lock:
@@ -287,9 +301,15 @@ class TrackerStatusManager:
                                     dupes = []
                                 else:
                                     try:
-                                        if await helper.prompt_yes_no(
-                                            f"Duplicate check failed on {tracker_name}. Do you want to proceed with the upload anyway?", default=False
+                                        with webui_events.prompt_context(
+                                            kind="tracker_checks",
+                                            tracker=tracker_name,
+                                            check_messages=[f"Error searching for duplicates on {tracker_name}: {e}"],
                                         ):
+                                            proceed_after_error = await helper.prompt_yes_no(
+                                                f"Duplicate check failed on {tracker_name}. Do you want to proceed with the upload anyway?", default=False
+                                            )
+                                        if proceed_after_error:
                                             dupes = []
                                         else:
                                             local_tracker_status["skipped"] = True

@@ -105,6 +105,7 @@ from src.dupe_checking import DupeChecker
 from src.dynamic_hdr_plot import dynamic_hdr_plot_enabled, process_dynamic_hdr_plots
 from src.early_tasks import cancel_and_drain_early_artifact_tasks, get_early_artifact_tasks, release_early_artifact_progress, start_early_artifact_tasks
 from src.early_tasks import is_usenet_only as _is_usenet_only
+from src.exceptions import UnsupportedSiteCheckError
 from src.get_desc import gen_desc
 from src.get_name import NameManager
 from src.get_tracker_data import TrackerDataManager
@@ -682,10 +683,11 @@ async def _prompt_game_meta(meta: Meta) -> None:
                 if meta.platform.upper() == "PSP":
                     system_choices = ["FREE", "NTSC", "PAL", "Skip"]
                 try:
-                    choice = CLI_UI.ask_choice(
-                        "BJSHARE: Select game system (TV standard):",
-                        choices=system_choices,
-                    )
+                    with _game_field_prompt(meta, "System", skip=False):
+                        choice = CLI_UI.ask_choice(
+                            "BJSHARE: Select game system (TV standard):",
+                            choices=system_choices,
+                        )
                     if choice != "Skip":
                         meta.game_system = choice
                 except EOFError:
@@ -694,10 +696,11 @@ async def _prompt_game_meta(meta: Meta) -> None:
             if needs_game_region and not meta.game_region:
                 region_choices = ["USA", "EUR", "JPN", "Skip"]
                 try:
-                    choice = CLI_UI.ask_choice(
-                        "BJSHARE: Select game region:",
-                        choices=region_choices,
-                    )
+                    with _game_field_prompt(meta, "Region", skip=False):
+                        choice = CLI_UI.ask_choice(
+                            "BJSHARE: Select game region:",
+                            choices=region_choices,
+                        )
                     if choice != "Skip":
                         meta.game_region = choice
                 except EOFError:
@@ -710,10 +713,11 @@ async def _prompt_game_meta(meta: Meta) -> None:
 
                 if meta.container.upper() not in container_choices:
                     try:
-                        choice = CLI_UI.ask_choice(
-                            "BJSHARE: Select container format ('Destravamento'):",
-                            choices=container_choices,
-                        )
+                        with _game_field_prompt(meta, "Container", skip=False):
+                            choice = CLI_UI.ask_choice(
+                                "BJSHARE: Select container format ('Destravamento'):",
+                                choices=container_choices,
+                            )
                         if choice != "Skip":
                             meta.container = choice
                     except EOFError:
@@ -724,6 +728,9 @@ async def _prompt_game_meta(meta: Meta) -> None:
 
 
 MUSIC_REQUIRED_FIELDS = ("artist", "album", "year", "media", "release_type")
+# Trackers whose music uploads are refused without cover artwork. Others
+# (Orpheus, LST, ...) accept a release without it, so the prompt can be skipped.
+MUSIC_ARTWORK_REQUIRED_TRACKERS = frozenset({"SEEDPOOL"})
 MUSIC_MEDIA_CHOICES = ("CD", "WEB", "Vinyl", "DVD", "BD", "Soundboard", "SACD", "DAT", "Cassette")
 MUSIC_RELEASE_TYPE_CHOICES = (
     "Album",
@@ -865,6 +872,22 @@ def _music_cover_allowed_hosts(trackers: Iterable[Any]) -> list[str] | None:
     return sorted(approved_hosts) if approved_hosts is not None else None
 
 
+async def _save_music_cover_url(meta: Meta) -> bool:
+    """Download meta.artwork_url to a local cover file and point meta.artwork_path at it."""
+    content = await asyncio.to_thread(_download_music_cover, meta.artwork_url)
+    if content is None:
+        return False
+    artwork_path = artwork_dir(meta.base_dir, str(meta.uuid)) / "music_cover.jpg"
+    try:
+        artwork_path.parent.mkdir(parents=True, exist_ok=True)
+        await asyncio.to_thread(artwork_path.write_bytes, content)
+    except OSError as error:
+        logger.warning(f"[yellow]MUSIC: could not save downloaded artwork: {error}[/yellow]")
+        return False
+    meta.artwork_path = str(artwork_path)
+    return True
+
+
 async def _host_music_cover(meta: Meta, uploadscreens_manager: UploadScreensManager, allowed_hosts: list[str] | None = None) -> None:
     """Host MUSIC artwork and publish it through the shared artwork API."""
     if meta.debug:
@@ -888,20 +911,9 @@ async def _host_music_cover(meta: Meta, uploadscreens_manager: UploadScreensMana
     except (OSError, ValueError, TypeError) as error:
         logger.debug(f"[yellow]MUSIC: ignored unusable artwork cache: {error}[/yellow]")
 
+    if not Path(str(meta.artwork_path or "")).is_file() and _is_http_url(meta.artwork_url) and not await _save_music_cover_url(meta):
+        return
     artwork_path = Path(str(meta.artwork_path or ""))
-    if not artwork_path.is_file() and _is_http_url(meta.artwork_url):
-        artwork_path = artwork_dir(meta.base_dir, str(meta.uuid)) / "music_cover.jpg"
-        content = await asyncio.to_thread(_download_music_cover, meta.artwork_url)
-        if content is None:
-            return
-
-        try:
-            artwork_path.parent.mkdir(parents=True, exist_ok=True)
-            await asyncio.to_thread(artwork_path.write_bytes, content)
-            meta.artwork_path = str(artwork_path)
-        except OSError as error:
-            logger.warning(f"[yellow]MUSIC: could not save downloaded artwork for image hosting: {error}[/yellow]")
-            return
     if not is_valid_cover_image(artwork_path):
         logger.warning("[yellow]MUSIC: local artwork is not a valid supported image.[/yellow]")
         return
@@ -950,18 +962,19 @@ _MUSIC_FIELD_LABELS = {
 }
 
 
-def _music_field_prompt(meta: Meta, field: str, *, hint: str = "", placeholder: str = "", keep: bool = True) -> contextlib.AbstractContextManager[None]:
+def _music_field_prompt(meta: Meta, field: str, *, hint: str = "", placeholder: str = "", keep: bool = True, conflicts: bool = True) -> contextlib.AbstractContextManager[None]:
     """Show a music metadata question in the Web UI with the release's current values.
 
-    Values the files disagree on are offered as answers, and with ``keep``
-    a blank answer (keep the current value, or skip) is offered as well.
+    With ``conflicts``, values the files disagree on are offered as answers
+    (turn it off for yes/no questions), and with ``keep`` a blank answer
+    (keep the current value, or skip) is offered as well.
     """
     summary: dict[str, Any] = {label: _music_field(meta, name) for name, label in _MUSIC_FIELD_LABELS.items()}
     summary["Artwork"] = summary["Artwork"] or meta.artwork_path
     current = str(_music_field(meta, field) or "")
     actions: list[tuple[str, str]] = [("", f"Keep {current}" if current else "Skip")] if keep else []
-    conflicts = meta.music_release.get("conflicts", {}) if isinstance(meta.music_release, dict) else {}
-    candidates = [str(value) for value in (conflicts.get(field) or [] if isinstance(conflicts, dict) else [])]
+    field_conflicts = meta.music_release.get("conflicts", {}) if conflicts and isinstance(meta.music_release, dict) else {}
+    candidates = [str(value) for value in (field_conflicts.get(field) or [] if isinstance(field_conflicts, dict) else [])]
     if field in {"year", "edition_year"}:
         candidates = [value for value in candidates if re.fullmatch(r"\d{4}", value)]
     offered = [value for value in dict.fromkeys(candidates) if value and value != current]
@@ -991,8 +1004,20 @@ def _book_field_prompt(meta: Meta, focus: str, *, hint: str = "", placeholder: s
 
 def _game_field_prompt(meta: Meta, focus: str, *, hint: str = "", placeholder: str = "", skip: bool = True) -> contextlib.AbstractContextManager[None]:
     """Show a game metadata question in the Web UI with the game's current values."""
-    summary: dict[str, Any] = {"Title": meta.title, "Year": meta.year, "Platform": meta.platform, "Subcategory": meta.game_subcategory}
+    summary: dict[str, Any] = {
+        "Title": meta.title,
+        "Year": meta.year,
+        "Platform": meta.platform,
+        "Subcategory": meta.game_subcategory,
+        "System": meta.game_system,
+        "Region": meta.game_region,
+        "Container": meta.container,
+    }
     return webui_events.field_prompt("Game", summary, focus=focus, hint=hint, actions=[("", "Skip")] if skip else [], placeholder=placeholder)
+
+
+def _music_artwork_required(meta: Meta) -> bool:
+    return any(str(tracker).upper() in MUSIC_ARTWORK_REQUIRED_TRACKERS for tracker in meta.trackers)
 
 
 async def _prompt_music_meta(meta: Meta) -> None:
@@ -1003,7 +1028,16 @@ async def _prompt_music_meta(meta: Meta) -> None:
         for field in required
         if (field == "cover_url" and not _is_http_url(_music_field(meta, field))) or (field != "cover_url" and not str(_music_field(meta, field) or "").strip())
     ]
-    has_artwork = bool(is_valid_cover_image(meta.artwork_path) or (_is_http_url(meta.artwork_url) or _is_http_url(_music_field(meta, "cover_url"))))
+    artwork_required = _music_artwork_required(meta)
+    if artwork_required and not is_valid_cover_image(meta.artwork_path):
+        # Trackers that require artwork check a local cover before the image host runs, so fetch a known URL now.
+        cover_url = meta.artwork_url if _is_http_url(meta.artwork_url) else _music_field(meta, "cover_url")
+        if _is_http_url(cover_url):
+            meta.artwork_url = str(cover_url)
+            await _save_music_cover_url(meta)
+        has_artwork = is_valid_cover_image(meta.artwork_path)
+    else:
+        has_artwork = bool(is_valid_cover_image(meta.artwork_path) or (_is_http_url(meta.artwork_url) or _is_http_url(_music_field(meta, "cover_url"))))
     if not has_artwork and "artwork" not in missing:
         missing.append("artwork")
 
@@ -1021,9 +1055,12 @@ async def _prompt_music_meta(meta: Meta) -> None:
     if not fields_to_prompt:
         return
     if meta.unattended:
-        logger.info(
-            f"[yellow]MUSIC upload: metadata requiring confirmation: {', '.join(fields_to_prompt)}. The tracker upload will be skipped until required values are supplied.[/yellow]"
-        )
+        # Optional artwork does not hold the upload back.
+        blocking = [field for field in fields_to_prompt if field != "artwork" or artwork_required]
+        if blocking:
+            logger.info(
+                f"[yellow]MUSIC upload: metadata requiring confirmation: {', '.join(blocking)}. The tracker upload will be skipped until required values are supplied.[/yellow]"
+            )
         return
 
     logger.info("\n[bold yellow]MUSIC metadata required or requiring confirmation:[/bold yellow]")
@@ -1066,16 +1103,24 @@ async def _prompt_music_meta(meta: Meta) -> None:
                     changed = True
             elif field in ("artwork", "cover_url"):
                 while True:
+                    hint = "Artwork is required" if artwork_required else "Artwork is optional for the selected trackers"
                     with _music_field_prompt(
-                        meta, "cover_url", hint="Artwork is required: a local image path or a public image URL.", placeholder="Image path or https:// URL", keep=False
+                        meta, "cover_url", hint=f"{hint}: a local image path or a public image URL.", placeholder="Image path or https:// URL", keep=not artwork_required
                     ):
-                        value = (CLI_UI.ask_string("Enter path to cover artwork image (or public image URL) for MUSIC: ") or "").strip()
+                        skip_note = "" if artwork_required else " (leave blank to skip)"
+                        value = (CLI_UI.ask_string(f"Enter path to cover artwork image (or public image URL) for MUSIC{skip_note}: ") or "").strip()
+                    if not value and not artwork_required:
+                        break
                     if not value:
-                        logger.info("[red]Artwork is required for MUSIC uploads. Please enter a valid file path or image URL.[/red]")
+                        required_by = ", ".join(sorted({str(tracker).upper() for tracker in meta.trackers} & MUSIC_ARTWORK_REQUIRED_TRACKERS))
+                        logger.info(f"[red]Artwork is required for MUSIC uploads to {required_by}. Please enter a valid file path or image URL.[/red]")
                         continue
                     if _is_http_url(value):
-                        _set_music_field(meta, "cover_url", value)
                         meta.artwork_url = value
+                        if artwork_required and not (await _save_music_cover_url(meta) and is_valid_cover_image(meta.artwork_path)):
+                            logger.info("[red]Could not download a valid image from that URL. Please try another file path or image URL.[/red]")
+                            continue
+                        _set_music_field(meta, "cover_url", value)
                         changed = True
                         break
                     path_obj = Path(value).expanduser()
@@ -1220,9 +1265,18 @@ async def _confirm_music_folder_hints(meta: Meta) -> None:
     try:
         for name, value in hints:
             field = _MUSIC_FOLDER_HINT_FIELDS.get(name)
-            if field and CLI_UI.ask_yes_no(f"Send {name} '{value}' from the folder name to Orpheus?", default=False):
-                _set_music_field(meta, field, value)
-                changed = True
+            if field:
+                with _music_field_prompt(
+                    meta,
+                    field,
+                    hint="Orpheus rule 2.1.19: edition details from the folder name are only sent when confirmed.",
+                    keep=False,
+                    conflicts=False,
+                ):
+                    confirmed = CLI_UI.ask_yes_no(f"Send {name} '{value}' from the folder name to Orpheus?", default=False)
+                if confirmed:
+                    _set_music_field(meta, field, value)
+                    changed = True
     except EOFError:
         logger.info("[yellow]Input cancelled — folder-name edition details are not sent.[/yellow]")
         return
@@ -1258,6 +1312,14 @@ def xxx_min_successful_uploads(meta: Meta, min_successful_uploads: int) -> int:
     return min(min_successful_uploads, max(1, contact_sheet_count))
 
 
+def skip_unsupported_release(meta: Meta, error: UnsupportedSiteCheckError, stage: str = "prep") -> None:
+    """Mark a release that site check mode cannot handle as skipped, not failed."""
+    logger.info(f"[yellow]Skipping {escape(Path(str(meta.path or '')).name)}: {escape(str(error))}[/yellow]")
+    webui_events.notice("attention", f"Skipped: {error}")
+    webui_events.stage(stage, "skip")
+    meta.skipped_unsupported = True
+
+
 async def process_meta(meta: Meta, base_dir: str) -> bool:
     """Process the metadata for each queued path."""
     if not meta.imghost:
@@ -1280,6 +1342,9 @@ async def process_meta(meta: Meta, base_dir: str) -> bool:
     webui_events.stage("prep", "start")
     try:
         meta = await prep.gather_prep(meta=meta, mode="cli")
+    except UnsupportedSiteCheckError as e:
+        skip_unsupported_release(meta, e)
+        return False
     except Exception as e:
         logger.info(f"Error in gather_prep: {e}")
         logger.info(traceback.format_exc())
@@ -1442,8 +1507,16 @@ async def process_meta(meta: Meta, base_dir: str) -> bool:
             meta.trackers = [t.strip().upper() for t in meta.trackers if t]
         logger.debug(f"Trackers list during edit process: {meta.trackers}")
         meta.edit = True
-        meta = await prep.gather_prep(meta=meta, mode="cli")
+        try:
+            meta = await prep.gather_prep(meta=meta, mode="cli")
+        except UnsupportedSiteCheckError as e:
+            # The edit can turn on --site-check for a release it cannot handle.
+            skip_unsupported_release(meta, e, stage="confirm")
+            return False
         TrackerSetup(config=config).filter_unsupported_trackers(meta)
+        if meta.category == "MUSIC" and _music_artwork_required(meta) and not is_valid_cover_image(meta.artwork_path):
+            # The edit can add a tracker that requires the artwork skipped earlier.
+            await _prompt_music_meta(meta)
         meta.name_notag, meta.name, meta.clean_name, meta.potential_missing = await name_manager.get_name(meta)
         await write_meta_file(meta)
         _publish_webui_preview_target(cast(str, meta.path or ""), meta.uuid or None)
@@ -1489,6 +1562,7 @@ async def process_meta(meta: Meta, base_dir: str) -> bool:
             "1PTBA",
             "ASIANCINEMA",
             "AITHER",
+            "AMIGOSSHARE",
             "BJSHARE",
             "BRASILTRACKER",
             "CAPYBARABR",
@@ -1518,19 +1592,17 @@ async def process_meta(meta: Meta, base_dir: str) -> bool:
             "TVCHAOSUK",
             "ULCX",
             "XINGYUNGEPT",
+            "ZMPT",
         ]:
             if tracker in trackers:
                 status_dict = meta.tracker_status.setdefault(tracker, {})
                 status_dict["skip_upload"] = meta.unattended_audio_skip or meta.unattended_subtitle_skip
 
-        await asyncio.sleep(0.2)
         await write_meta_file(meta)
         _publish_webui_preview_target(cast(str, meta.path or ""), meta.uuid or None)
-        await asyncio.sleep(0.2)
 
         try:
             await validate_tracker_logins(meta, trackers)
-            await asyncio.sleep(0.2)
         except Exception as e:
             logger.warning(f"[yellow]Warning: Tracker validation encountered an error: {e}[/yellow]")
 
@@ -1702,13 +1774,19 @@ async def process_meta(meta: Meta, base_dir: str) -> bool:
                 except Exception as e:
                     logger.error(f"[red]Error processing dynamic HDR plots: {e}[/red]")
 
+            # Hosted images discarded in the Web UI leave the list before the
+            # capture cutoff is checked, so fresh frames are captured and hosted.
+            from src.screenshot_review import discard_remote_images
+
+            meta.image_list, reviewed_uploads = discard_remote_images(Path(meta.base_dir) / "tmp" / meta.uuid, cast(list[dict[str, Any]], meta.image_list or []))
+
             # Take Screenshots
             try:
                 # Keep the later upload count in sync with screenshots removed
                 # through the Web UI review while this run awaited confirmation.
                 from src.screenshot_review import target_count
 
-                meta.screens = target_count(Path(meta.base_dir) / "tmp" / meta.uuid, meta.screens)
+                meta.screens = target_count(Path(meta.base_dir) / "tmp" / meta.uuid, meta.screens, allow_empty=meta.category == "BOOK")
                 if meta.category == "MUSIC":
                     logger.debug("[cyan]MUSIC: skipping video screenshots and MediaInfo-dependent image processing.[/cyan]")
                 elif meta.is_disc == "BDMV":
@@ -1836,9 +1914,6 @@ async def process_meta(meta: Meta, base_dir: str) -> bool:
             # Remote images can be reviewed in the WebUI.  Replacements and
             # additions remain local until this normal hosting stage, even if
             # the original remote list already satisfies the cutoff.
-            from src.screenshot_review import staged_remote_uploads
-
-            reviewed_uploads = staged_remote_uploads(Path(meta.base_dir) / "tmp" / meta.uuid, cast(list[dict[str, Any]], meta.image_list or []))
             needs_shared_image_host = any(tracker not in {"HDBITS", "PTERCLUB"} or not tracker_class_map[tracker](config=config).rehost_images for tracker in meta.trackers)
             if (len(meta.image_list) < cutoff or reviewed_uploads) and meta.skip_imghost_upload is False and meta.category not in ("GAME", "MUSIC") and needs_shared_image_host:
                 # Validate and (if needed) rehost images to tracker-approved hosts before uploading any new screenshots.
@@ -2400,7 +2475,7 @@ async def update_notification() -> str:
     if cached_response:
         remote_version, remote_content = cached_response
     else:
-        remote_version, remote_content = get_remote_version(remote_version_url)
+        remote_version, remote_content = await asyncio.to_thread(get_remote_version, remote_version_url)
         if remote_version and remote_content:
             _write_update_notification_cache(remote_version, remote_content)
     if not remote_version:
@@ -2464,26 +2539,6 @@ async def do_the_thing(base_dir: str) -> None:
 
     configure_stats(config)
 
-    from src.prowlarr import ProwlarrError, apply_prowlarr_credentials, configured_prowlarr, fetch_prowlarr_credentials
-
-    if prowlarr_connection := configured_prowlarr(config):
-        prowlarr_started = time.monotonic()
-        try:
-            report = await asyncio.to_thread(
-                fetch_prowlarr_credentials,
-                prowlarr_connection[0],
-                prowlarr_connection[1],
-                set(tracker_class_map),
-            )
-            applied = apply_prowlarr_credentials(config, report)
-            await record_event_async("api", service="prowlarr", operation="credential_sync", outcome="success", duration_ms=(time.monotonic() - prowlarr_started) * 1000)
-            logger.debug(f"[green]Prowlarr supplied fallback credentials for {len(applied)} tracker(s).[/green]")
-        except ProwlarrError as exc:
-            await record_event_async("api", service="prowlarr", operation="credential_sync", outcome="error", duration_ms=(time.monotonic() - prowlarr_started) * 1000)
-            logger.warning(f"[yellow]Prowlarr credential fallback unavailable: {exc}[/yellow]")
-
-    await asyncio.sleep(0.1)  # Ensure it's not racing
-
     tmp_dir = Path(base_dir) / "tmp"
     if not Path(tmp_dir).exists():
         if os.name != "nt":
@@ -2530,8 +2585,32 @@ async def do_the_thing(base_dir: str) -> None:
         else:
             break
 
+    from src.prowlarr import ProwlarrError, apply_prowlarr_credentials, configured_prowlarr, fetch_prowlarr_credentials
+
+    # Both are network round trips that do not depend on each other. They run
+    # after stdin is read, so a paste prompt never waits on them.
+    update_check = asyncio.create_task(update_notification())
+    try:
+        if prowlarr_connection := configured_prowlarr(config):
+            prowlarr_started = time.monotonic()
+            try:
+                report = await asyncio.to_thread(
+                    fetch_prowlarr_credentials,
+                    prowlarr_connection[0],
+                    prowlarr_connection[1],
+                    set(tracker_class_map),
+                )
+                applied = apply_prowlarr_credentials(config, report)
+                await record_event_async("api", service="prowlarr", operation="credential_sync", outcome="success", duration_ms=(time.monotonic() - prowlarr_started) * 1000)
+                logger.debug(f"[green]Prowlarr supplied fallback credentials for {len(applied)} tracker(s).[/green]")
+            except ProwlarrError as exc:
+                await record_event_async("api", service="prowlarr", operation="credential_sync", outcome="error", duration_ms=(time.monotonic() - prowlarr_started) * 1000)
+                logger.warning(f"[yellow]Prowlarr credential fallback unavailable: {exc}[/yellow]")
+    finally:
+        current_version = await update_check
+
     meta.ua_name = "Upload-Assistant"
-    meta.current_version = await update_notification()
+    meta.current_version = current_version
 
     signature = f"Shared with {meta.ua_name}"
     if meta.current_version:
@@ -2834,9 +2913,10 @@ async def do_the_thing(base_dir: str) -> None:
             finally:
                 await cancel_and_drain_early_artifact_tasks(meta.uuid)
             if not meta_success:
-                # A skip is the user's choice, not a failure: no red stage, no error.
-                outcome = "no_upload" if meta.skipped_by_user else "error"
-                if not meta.skipped_by_user:
+                # A skip by the user or for an unsupported release is not a failure: no red stage, no error.
+                skipped = meta.skipped_by_user or meta.skipped_unsupported
+                outcome = "no_upload" if skipped else "error"
+                if not skipped:
                     webui_events.fail_active_stage()
                 set_stats_context(debug=bool(meta.debug), category=str(meta.category or ""))
                 await record_event_async("item", operation="completed", outcome=outcome)
@@ -2845,7 +2925,8 @@ async def do_the_thing(base_dir: str) -> None:
                     processed_files_count += 1
                     skipped_files_count += 1
                     logger.info(f"[cyan]Processed {processed_files_count}/{total_files} files with {skipped_files_count} skipped uploading.\n\n")
-                    if log_file and (not meta.debug or "debug" in Path(log_file).name):
+                    # Unsupported releases stay unprocessed so a later version can check them.
+                    if log_file and not meta.skipped_unsupported and (not meta.debug or "debug" in Path(log_file).name):
                         if meta.site_upload_queue:
                             await QueueManager.save_processed_path(log_file, current_item_path)
                         else:

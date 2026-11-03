@@ -571,15 +571,15 @@ config: dict[str, Any] = {
         # Note: Description layout settings (like screenshot grids, logos, etc.) can be overridden per-tracker.
         # See: https://github.com/wastaken7/Upload-Assistant/blob/development/docs/description-builder.md
         # Available trackers:
-        #   0DAYFILES, 1PTBA, AITHER, ALPHARATIO, ANTHELION, ASIANCINEMA, AVISTAZ, BEYONDHD, BITHDTV, BITPORN, BJSHARE, BLUTOPIA,
-        #   BRASILTRACKER, BROADCASTHENET, CAPYBARABR, CATHODERAYTUBE, CINEMATIK, CINEMAZ, CURUPIRA, DARKPEERS, DESITORRENTS, DIGITALCORE,
-        #   DREADVAULT, DRUNKENSLUG, EMUWAREZ, FILELIST, FLOOD, FUNFILE, GREATPOSTERWALL, HAWKEUNO, HDBITS, HDSPACE, HDTORRENTS, HELLENICHD, HOMIEHELPDESK,
+        #   0DAYFILES, 1PTBA, AITHER, ALPHARATIO, AMIGOSSHARE, ANTHELION, ASIANCINEMA, AVISTAZ, BEYONDHD, BITHDTV, BITPORN, BJSHARE, BLUTOPIA,
+        #   BRASILTRACKER, BROADCASTHENET, CAPYBARABR, CATHODERAYTUBE, CINEMATIK, CINEMAZ, CURUPIRA, CZTEAM, DARKPEERS, DESITORRENTS,
+        #   DIGITALCORE, DIRTYBYTES, DREADVAULT, DRUNKENSLUG, EMUWAREZ, EXOTICAZ, FILEIPLAY, FILELIST, FLOOD, FUNFILE, GREATPOSTERWALL, HAWKEUNO, HDBITS, HDSPACE, HDTORRENTS, HELLENICHD, HOMIEHELPDESK,
         #   IMMORTALSEED, INFINITYHD, IPTORRENTS, ITATORRENTS, LAJIDUI, LASTDIGITALUNDERGROUND, LATTEAM, LEMONHD, LOCADORA, LONGPT, LST,
         #   LUMINARR, MAKINGOFF, MIDNIGHTSCENE, MTEAM, NEBULANCE, NORDICQUALITY, NZBGEEK, NZBNEST, OLDTOONSWORLD, ONLYENCODES, ORPHEUS, PASSTHEPOPCORN,
         #   PEERGARDEN, POLISHTORRENT, PORTUGAS, PRIVATEHD, PTCAFE, PTERCLUB, PTFANS, PTGTK, PTSKIT, PTZONE, QINGWA, RACING4EVERYONE, RAILGUNPT,
         #   RASTASTUGAN, REELFLIX, RETROFLIX, RETROMOVIESCLUB, ROCKETHD, SAMARITANO, SEEDPOOL, SHAREISLAND, SKIPTHECOMMERCIALS, SPEEDAPP,
         #   SUIO, SWARMAZON, THELEACHZONE, THEOLDSCHOOL, TORRENTEROS, TORRENTHAVEN, TORRENTHR, TORRENTLEECH, TOTHEGLORY, TVCHAOSUK, ULCX, UTOPIA,
-        #   VIETMEDIAF, VULTU, XINGYUNGEPT, YUSCENE, ZENITH
+        #   VIETMEDIAF, VULTU, XINGYUNGEPT, YUSCENE, ZENITH, ZMPT
         # This list is validated against the tracker blocks below by the test suite.
         # Only add the trackers you want to upload to on a regular basis
         "default_trackers": "",
@@ -689,6 +689,21 @@ config: dict[str, Any] = {
             "username": "",
             "password": "",
             "announce_url": "",
+            "inject_delay": 0,
+        },
+        "AMIGOSSHARE": {
+            "cli_alias": "ASC",
+            # Instead of using the tracker acronym for folder name when sym/hard linking, you can use a custom name
+            "link_dir_name": "",
+            # Cookies required (export from https://amigos-share.club to data/cookies/AMIGOSSHARE.txt).
+            # See: https://github.com/wastaken7/Upload-Assistant/blob/development/docs/example-config.md#how-to-export-cookies
+            # The torrent is downloaded from the site after the upload; the announce URL (with your passkey) is
+            # used for the private torrent that is sent, and is seeded if that download fails.
+            "announce_url": "",
+            "anon": True,
+            # If True, the script performs a basic rules compliance check (e.g., file types, REMUX dubbing, AV1 encodes).
+            # This does not cover all tracker rules. Set to False to disable.
+            "check_for_rules": True,
             "inject_delay": 0,
         },
         "ANTHELION": {
@@ -882,6 +897,8 @@ config: dict[str, Any] = {
             # See: https://github.com/wastaken7/Upload-Assistant/blob/development/docs/example-config.md#how-to-export-cookies
             # Two-factor authentication (2FA) must be enabled in your profile settings; otherwise, your session cookies will expire fairly quickly.
             "announce_url": "",
+            # "use_for_search": False, set to True to import IDs and descriptions from BJ-Share torrents found in your client's torrent comments
+            "use_for_search": False,
             "anon": True,
             # Set to False if during an anonymous upload you want your release group to be hidden
             "show_group_if_anon": True,
@@ -1123,6 +1140,14 @@ config: dict[str, Any] = {
             "exact_match_only": False,
             "inject_delay": 0,
         },
+        "CZTEAM": {
+            "cli_alias": "CZT",
+            # Instead of using the tracker acronym for folder name when sym/hard linking, you can use a custom name
+            "link_dir_name": "",
+            # Your site username and passkey, shown at https://czteam.me/my.php
+            "username": "",
+            "passkey": "",
+        },
         "DARKPEERS": {
             "cli_alias": "DP",
             # Instead of using the tracker acronym for folder name when sym/hard linking, you can use a custom name
@@ -1242,6 +1267,14 @@ config: dict[str, Any] = {
             "add_audio_spectrogram": True,
             "inject_delay": 0,
         },
+        "DIRTYBYTES": {
+            "cli_alias": "DB",
+            # Instead of using the tracker acronym for folder name when sym/hard linking, you can use a custom name
+            "link_dir_name": "",
+            # Generate your API key at Settings -> API key
+            "api_key": "",
+            "anon": True,
+        },
         "DREADVAULT": {
             "cli_alias": "DVL",
             # Instead of using the tracker acronym for folder name when sym/hard linking, you can use a custom name
@@ -1341,6 +1374,37 @@ config: dict[str, Any] = {
             "add_audio_spectrogram": True,
             "inject_delay": 0,
         },
+        "EXOTICAZ": {
+            "cli_alias": "EXZ",
+            # Instead of using the tracker acronym for folder name when sym/hard linking, you can use a custom name
+            "link_dir_name": "",
+            # Cookies required (export from https://exoticaz.to to data/cookies/EXOTICAZ.txt).
+            # See: https://github.com/wastaken7/Upload-Assistant/blob/development/docs/example-config.md#how-to-export-cookies
+            # Uploads are published with the torrent file downloaded from the site, which carries your passkey.
+            "anon": True,
+            # If True, the script performs a basic rules compliance check (e.g., file types, size, video sheets).
+            # This does not cover all tracker rules. Set to False to disable.
+            "check_for_rules": True,
+            # ExoticaZ requires a video sheet per video and, for single clips, a full size screenshot.
+            # Set DEFAULT "xxx_single_file_screens" to at least 1 when uploading single clips.
+            # The configurations below override the DEFAULT configuration
+            "custom_description_header": "",
+            "custom_signature": "",
+            "inject_delay": 0,
+        },
+        "FILEIPLAY": {
+            "cli_alias": "FIP",
+            # Instead of using the tracker acronym for folder name when sym/hard linking, you can use a custom name
+            "link_dir_name": "",
+            # Personal token from https://fileiplay.org/settings/api with the torrents:upload and torrents:read scopes
+            "api_key": "",
+            # Integration API key from https://fileiplay.org/integrations (Show API key), used for duplicate searches
+            # and to download the published .torrent, which carries your passkey.
+            "torznab_api_key": "",
+            "anon": True,
+            # The TMDB logo is left out of FileIPlay descriptions unless this is set to True here.
+            "add_logo": False,
+        },
         "FILELIST": {
             "cli_alias": "FL",
             # Instead of using the tracker acronym for folder name when sym/hard linking, you can use a custom name
@@ -1357,7 +1421,7 @@ config: dict[str, Any] = {
             "link_dir_name": "",
             "api_key": "",
             "announce_url": "https://flood.st/announce/Custom_Announce_URL",
-            "anon": False,
+            "anon": True,
         },
         "FUNFILE": {
             "cli_alias": "FF",
@@ -2924,7 +2988,7 @@ config: dict[str, Any] = {
             # "use_for_search": False, set to True if you want to use RocketHD for automatic ID searching or description parsing
             "use_for_search": False,
             "api_key": "",
-            "anon": False,
+            "anon": True,
             # Use German title instead of English title, if available
             "use_german_title": False,
         },
@@ -3309,7 +3373,7 @@ config: dict[str, Any] = {
             "use_for_search": False,
             "api_key": "",
             "announce_url": "",
-            "anon": False,
+            "anon": True,
             # Send uploads to the moderation queue for staff review and approval
             "modq": False,
         },
@@ -3660,6 +3724,13 @@ config: dict[str, Any] = {
             "bluray_image_size": "",
             "add_audio_spectrogram": True,
             "inject_delay": 0,
+        },
+        "ZMPT": {
+            "cli_alias": "ZMPT",
+            # Cookies required (export from https://zmpt.cc/ to data/cookies/ZMPT.txt).
+            # See: https://github.com/wastaken7/Upload-Assistant/blob/development/docs/example-config.md#how-to-export-cookies
+            "announce_url": "",
+            "anon": True,
         },
         "MANUAL": {
             "cli_alias": "MANUAL",

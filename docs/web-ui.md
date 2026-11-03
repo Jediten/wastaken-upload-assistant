@@ -117,7 +117,11 @@ The File Browser lists only content inside the configured browse roots. Use it t
 
 Normal browsing shows non-hidden files and folders inside the permitted roots so that video, disc, book, game, ISO, and other supported upload types remain available. The separate description-file picker is limited to `.txt`, `.nfo`, and `.md` files.
 
-Listings and searches omit dot-prefixed entries, Windows entries marked Hidden or System, and known system folders such as `$RECYCLE.BIN` and `System Volume Information`. Searches do not descend into those folders.
+Search normally includes every configured location. Enable **Search this folder** beside the search box to search recursively only beneath the folder most recently activated in the existing tree. Upload-selection checkboxes do not change this scope. The option defaults off and is not persisted. Collapse all clears the active search folder. While the option is on, changing mode or moving to another folder cancels pending results while keeping the query text; type again or press Enter to run a fresh search. Turning the option off also cancels pending results. Navigating the tree never clears an all-locations search. Enabling the option without a folder selected prompts you to select one, never scans all locations instead.
+
+Search results prioritize matching folders before filling the remaining places with files (100 by default), even when files are encountered in an earlier location. Once the results are full, search checks at most 500 more folders for matching folders and then stops, so a folder deep in a very large library can be left out in favor of files.
+
+Listings and searches omit dot-prefixed entries, Windows entries marked Hidden or System, and known system folders such as `$RECYCLE.BIN` and `System Volume Information`. Searches do not descend into those folders. Searches list symlinks and Windows junctions whose targets are inside the browse roots, as the tree does, but never descend into them. Searching inside a linked folder searches its target. These portable path checks do not protect against concurrent filesystem replacement; only configure trusted browse locations.
 
 You can also type or paste paths into **Upload paths** on desktop or mobile. Use server paths, one file or folder per line. Enter adds a line; use the execution button to start. One path runs individually, and multiple paths create a WebUI queue. Blank lines and duplicate paths are ignored, surrounding quotes are accepted, and each queue item can have its own arguments. The limit is 1,000 paths per upload.
 
@@ -159,7 +163,15 @@ Each option has its own control:
 
 Every control edits only its own part of **Additional Arguments**, so the rest of what you typed is kept, and edits typed into the field show up in the controls. Values that need quoting are quoted the way the server reads them. Below the field, the WebUI warns about unknown options (with a suggestion), missing or invalid values, options set twice, options that cannot be combined (such as `--nohash` and `--rehash`), stray values and unclosed quotes. Warnings never block an upload; the server still validates the command. The [CLI arguments reference](cli-args.md) explains each available flag.
 
-Choose **Check status** to run a lightweight website-reachability check for the configured trackers. The dot beside each tracker shows available, issue detected, unavailable, or not checked. An affected selected tracker also gets a compact warning with its check age and expandable details; on the Upload page it can be deselected directly from that warning. Results are cached for 15 minutes and reused between the Upload and Configuration pages. These checks do not use tracker credentials and cannot confirm that an account or upload endpoint is working, so warnings never prevent an upload.
+Choose **Check now** under **Tracker status** to run a lightweight website-reachability check for the configured trackers. Its last-check age appears beside the button. The dot beside each tracker shows available, issue detected, unavailable, or not checked. An affected selected tracker also gets a compact warning with its check age and expandable details; on the Upload page it can be deselected directly from that warning. Results are cached for 15 minutes and reused between the Upload and Configuration pages. These checks do not use tracker credentials and cannot confirm that an account or upload endpoint is working, so warnings never prevent an upload.
+
+#### Tracker layout
+
+Keep favourites in the standard **Pinned** group, or create custom groups for the way you work. In the normal tracker selector, each heading shows how many trackers are selected and one button: **Select all** when none or some are selected, or **Deselect all** when every tracker shown in the group is selected. Deselecting one tracker changes the button back to **Select all**. The button updates only the trackers currently shown in that group, including **Pinned** and **Ungrouped**; selections in other groups stay as they are. This action is disabled during a run.
+
+Under **Layout & view**, choose **Edit layout** to show the pin and options buttons beside each tracker. Use a pin to move a tracker into **Pinned** at the top of the selector; unpinning restores its previous group. In edit mode, add named groups, rename headings, and drag trackers between groups or into a new order. The **⋯** options button sits between the tracker name and its pin. It opens **Move to…**, **Move earlier**, and **Move later** actions, keeping these controls hidden until needed. **Move to…** lists **Pinned**, custom groups, and **Ungrouped**, excluding the current group. **Move earlier** and **Move later** reorder within the current group and are disabled at its boundaries. All actions work with touch or a keyboard. **Back** returns from the group choices to the options; **Close** or **Escape** closes the panel. Focus returns to the options button after moving, reordering, or closing. Use the drag handle beside a group name to reorder groups; the name field supports normal text selection and editing. Choose **Done** to hide the editing controls and return to upload selection. **Show all supported trackers** is a toggle button. Its indicator is outlined when off and filled with a checkmark when on. When enabled, unconfigured trackers are also shown. Click it again to show only configured or selected trackers.
+
+Pins, groups and ordering save automatically in the current browser; other browsers and devices have separate layouts. Organising trackers does not select them for upload or change the upload order. Removing a group returns its trackers to **Ungrouped**. **Reset layout** clears the saved organisation after confirmation. Under **Tracker selection**, **Reset to Defaults** restores the configured default tracker selection, and **Clear All** deselects all trackers for the upload. Tracker controls follow the WebUI's selected colour theme, light or dark mode, and square or rounded corner style.
 
 ### Start the upload
 
@@ -399,11 +411,13 @@ The database is stored at `data/stats.sqlite3` below the user-state directory. C
 
 Appearance is shared by the Upload, Configuration, sign-in, and recovery interfaces. Choose:
 
-- a color theme: Amethyst, Charcoal, Evergreen, Graphite, Midnight, or Obsidian;
-- Rounded or Square corners; and
+- a color theme: Amber (the default), Amethyst, Charcoal, Evergreen, Graphite, Midnight, or Obsidian;
+- Rounded (the default) or Square corners; and
 - Light or Dark mode.
 
-These preferences are stored in the browser, so another browser or device can use different choices.
+These preferences are stored in the browser, so another browser or device can use different choices. A browser that already saved a theme or corner style keeps it; choose **Amber** and **Rounded** to switch to the current default look.
+
+The interface uses the bundled Inter and JetBrains Mono typefaces, so it looks the same on every system and needs no font downloads.
 
 ### Help & Resources
 

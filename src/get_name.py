@@ -138,7 +138,6 @@ class NameManager:
         year = components.year
         resolution = components.resolution
         audio = components.audio
-        hardcoded_subs = components.hardcoded_subs
         service = components.service
         season = components.season
         episode = components.episode
@@ -202,10 +201,10 @@ class NameManager:
                 name = f"{title} {alt_title} {year} {edition} {hybrid} {repack} {resolution} {uhd} {source} {audio} {hdr} {video_encode}"
                 potential_missing = ["edition", "description"]
             elif type == "WEBDL":  # WEB-DL
-                name = f"{title} {alt_title} {year} {edition} {hybrid} {repack} {resolution} {uhd} {service} WEB-DL {hardcoded_subs} {audio} {hdr} {video_encode}"
+                name = f"{title} {alt_title} {year} {edition} {hybrid} {repack} {resolution} {uhd} {service} WEB-DL {audio} {hdr} {video_encode}"
                 potential_missing = ["edition", "service"]
             elif type == "WEBRIP":  # WEBRip
-                name = f"{title} {alt_title} {year} {edition} {hybrid} {repack} {resolution} {uhd} {service} WEBRip {hardcoded_subs} {audio} {hdr} {video_encode}"
+                name = f"{title} {alt_title} {year} {edition} {hybrid} {repack} {resolution} {uhd} {service} WEBRip {audio} {hdr} {video_encode}"
                 potential_missing = ["edition", "service"]
             elif type == "HDTV":  # HDTV
                 name = f"{title} {alt_title} {year} {edition} {repack} {resolution} {source} {audio} {video_encode}"
@@ -236,10 +235,10 @@ class NameManager:
                 name = f"{title} {year} {alt_title} {season}{episode} {episode_title} {part} {edition} {hybrid} {repack} {resolution} {uhd} {source} {audio} {hdr} {video_encode}"  # SOURCE
                 potential_missing = ["edition", "description"]
             elif type == "WEBDL":  # WEB-DL
-                name = f"{title} {year} {alt_title} {season}{episode} {episode_title} {part} {edition} {hybrid} {repack} {resolution} {uhd} {service} WEB-DL {hardcoded_subs} {audio} {hdr} {video_encode}"
+                name = f"{title} {year} {alt_title} {season}{episode} {episode_title} {part} {edition} {hybrid} {repack} {resolution} {uhd} {service} WEB-DL {audio} {hdr} {video_encode}"
                 potential_missing = ["edition", "service"]
             elif type == "WEBRIP":  # WEBRip
-                name = f"{title} {year} {alt_title} {season}{episode} {episode_title} {part} {edition} {hybrid} {repack} {resolution} {uhd} {service} WEBRip {hardcoded_subs} {audio} {hdr} {video_encode}"
+                name = f"{title} {year} {alt_title} {season}{episode} {episode_title} {part} {edition} {hybrid} {repack} {resolution} {uhd} {service} WEBRip {audio} {hdr} {video_encode}"
                 potential_missing = ["edition", "service"]
             elif type == "HDTV":  # HDTV
                 name = f"{title} {year} {alt_title} {season}{episode} {episode_title} {part} {edition} {repack} {resolution} {source} {audio} {video_encode}"
@@ -782,8 +781,26 @@ class NameManager:
             return "SKIPPED"
         suffix = " (MANDATORY): " if is_mandatory else " (optional, press Enter to skip): "
         prompt = f"{field_name} not found for disc. Please enter it manually{suffix}"
+        is_region = "region" in field_name.lower()
+        focus = "Region" if is_region else "Distributor"
+        summary: dict[str, Any] = {
+            "Disc": meta.is_disc,
+            "Release": meta.name or meta.title,
+            "Region": "" if is_region else meta.region,
+            "Distributor": "" if not is_region else meta.distributor,
+        }
+        hint = ("The disc's region or 3-letter country code (e.g. USA, GBR, FRA, JPN)." if is_region else "The disc's distributor, as listed on the tracker.") + (
+            " Leaving it blank skips trackers that require it." if is_mandatory else " Leave it blank to skip."
+        )
         try:
-            with webui_events.answer_buttons([("", "Skip this tracker" if is_mandatory else "Skip")]):
+            with webui_events.field_prompt(
+                "Disc region" if is_region else "Disc distributor",
+                summary,
+                focus=focus,
+                hint=hint,
+                actions=[("", "Skip this tracker" if is_mandatory else "Skip")],
+                placeholder="e.g. USA, GBR, FRA, JPN" if is_region else "Distributor name",
+            ):
                 value = cli_ui.ask_string(prompt)
             return value.upper() if value else "SKIPPED"
         except EOFError:

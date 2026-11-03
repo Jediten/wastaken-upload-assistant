@@ -10,6 +10,7 @@ from typing import Any, cast
 import cli_ui
 import langcodes
 
+from src import language_names, webui_events
 from src.console import logger
 from src.meta import Meta
 from src.trackers.common import Common
@@ -601,7 +602,7 @@ def bloated_check(meta: Meta, audio_languages: Sequence[str] | str, is_eng_origi
             clean_lang = audio_language.split("-")[0].split("_")[0].strip().lower()
             if clean_lang:
                 lang = langcodes.Language.get(clean_lang)
-                language_display = lang.display_name()
+                language_display = language_names.display_name(lang)
         except (LookupError, AttributeError, ValueError) as e:
             # Silently fall back to the original language code
             logger.debug(f"[yellow]Debug: Unable to convert language code '{audio_language}' to full name: {e}[/yellow]")
@@ -710,7 +711,16 @@ def dts_core_additional_check(meta: Meta) -> None:
                     logger.info(f"[bold red]DTS audio track #{lossy_idx} appears to be a lossy duplicate of DTS-HD MA track #{hd_idx}.[/bold red]")
                     if not meta.unattended or meta.unattended_confirm:
                         try:
-                            allow = cli_ui.ask_yes_no("Do you want to upload anyway?", default=False)
+                            with webui_events.field_prompt(
+                                "Duplicate DTS track",
+                                {
+                                    "DTS-HD MA track": f"#{hd_idx}",
+                                    "Lossy DTS track": f"#{lossy_idx}",
+                                    "Language": hd_track.get("Language") or "",
+                                },
+                                hint=f"DTS audio track #{lossy_idx} appears to be a lossy duplicate of DTS-HD MA track #{hd_idx}.",
+                            ):
+                                allow = cli_ui.ask_yes_no("Do you want to upload anyway?", default=False)
                         except Exception:
                             allow = False
                         if allow:

@@ -1,10 +1,11 @@
 # Upload Assistant © 2025 Audionut & wastaken7 — Licensed under UAPL v1.0
 import re
-from typing import Any
+from typing import Any, ClassVar
 
 from src.console import logger
 from src.get_desc import DescriptionBuilder
 from src.languages import languages_manager
+from src.manual_input import confirm_override
 from src.meta import Meta
 from src.rehostimages import ImageHostPolicy, RehostImagesManager
 from src.trackers.common import Common
@@ -18,6 +19,22 @@ class SkipTheCommercials(UNIT3D):
     SkipTheCommercials (STC) is a Private Torrent Tracker for TV and
     documentary movies.
     """
+
+    # Options of the ID fields, offered in the Web UI preview (the getters ignore mapping_only).
+    payload_choices: ClassVar[dict[str, tuple[tuple[str, str], ...]]] = {
+        "type_id": (
+            ("1", "DISC"),
+            ("2", "REMUX"),
+            ("3", "ENCODE"),
+            ("4", "WEBDL"),
+            ("5", "WEBRIP"),
+            ("6", "HDTV"),
+            ("13", "WEB pack"),
+            ("14", "SD WEB pack"),
+            ("17", "SD pack"),
+            ("18", "HD pack"),
+        ),
+    }
 
     tracker = "SKIPTHECOMMERCIALS"
     display_name = "SkipTheCommercials"
@@ -156,21 +173,20 @@ class SkipTheCommercials(UNIT3D):
                 logger.info(f"{self.tracker}: [bold red]Only TV and documentary movie uploads are allowed at {self.tracker}.[/bold red]")
             return False
 
-        passed = True
         genres = ", ".join(str(value) for value in [*(meta.keywords or []), *combined_genres])
         adult_keywords = ["xxx", "erotic", "porn", "adult", "orgy", "hentai", "adult animation", "softcore"]
         if any(re.search(rf"(^|,\s*){re.escape(keyword)}(\s*,|$)", genres, re.IGNORECASE) for keyword in adult_keywords):
             logger.info(f"{self.tracker}: [bold red]Porn is not allowed at {self.tracker}.[/bold red]")
-            passed = False
+            if not await confirm_override(meta):
+                return False
 
         if not meta.valid_mi_settings:
             logger.info(f"{self.tracker}: [bold red]No encoding settings in mediainfo, skipping {self.tracker} upload.[/bold red]")
             return False
 
-        language_ok = meta.is_disc in ["BDMV", "DVD"] or await self.common.check_language_requirements(
+        return meta.is_disc in ["BDMV", "DVD"] or await self.common.check_language_requirements(
             meta, self.tracker, languages_to_check=["english"], check_audio=True, check_subtitle=True, original_language=True
         )
-        return language_ok and passed
 
     async def get_name(self, meta: Meta) -> dict[str, str]:
         stc_name = meta.name

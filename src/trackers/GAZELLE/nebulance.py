@@ -7,8 +7,10 @@ from urllib.parse import urlencode
 import aiofiles
 import httpx
 
+from src import payload_preview
 from src.cogs.redaction import Redaction
 from src.console import logger
+from src.manual_input import confirm_override
 from src.mediainfo import strip_report_by_line
 from src.meta import Meta
 from src.trackers.common import Common
@@ -114,6 +116,29 @@ class Nebulance:
         # Leave this in so manual works
         return
 
+    async def get_data(self, meta: Meta, mi_dump: str | None = None) -> dict[str, Any]:
+        """Build the upload form; without ``mi_dump`` (a preview) the MediaInfo is left out."""
+        data: dict[str, Any] = {
+            "action": "upload",
+            "api_key": self.api_key,
+            "tvmazeid": "" if not meta.tvmaze_id else int(meta.tvmaze_id),
+            "mediainfo": mi_dump,
+            "category": await self.get_cat_id(meta),
+            "ignoredupes": "1",
+        }
+        return data
+
+    async def get_payload_preview(self, meta: Meta) -> payload_preview.TrackerPreview:
+        """The upload form as it is known before screenshots, for the Web UI to show and edit."""
+        specs = {
+            "action": payload_preview.readonly("Action"),
+            "tvmazeid": payload_preview.number("TVmaze ID"),
+            "category": payload_preview.choice("Category", [(1, "Episode"), (3, "Season pack")]),
+            "ignoredupes": payload_preview.flag("Ignore dupes"),
+        }
+        deferred = {"mediainfo": "Read from the MediaInfo/BDInfo report at upload time"}
+        return payload_preview.describe(self.tracker, await self.get_data(meta), specs, deferred=deferred)
+
     async def upload(self, meta: Meta) -> bool:
         await self.common.create_torrent_for_upload(meta, self.tracker, self.source_flag)
 
@@ -127,14 +152,7 @@ class Nebulance:
         async with aiofiles.open(torrent_file_path, "rb") as f:
             torrent_bytes = await f.read()
         files: dict[str, tuple[str, bytes, str]] = {"file_input": ("torrent.torrent", torrent_bytes, "application/x-bittorrent")}
-        data: dict[str, Any] = {
-            "action": "upload",
-            "api_key": self.api_key,
-            "tvmazeid": "" if not meta.tvmaze_id else int(meta.tvmaze_id),
-            "mediainfo": mi_dump,
-            "category": await self.get_cat_id(meta),
-            "ignoredupes": "1",
-        }
+        data = payload_preview.apply_payload_edits(meta, self.tracker, await self.get_data(meta, mi_dump))
 
         try:
             if not meta.debug:
@@ -171,11 +189,11 @@ class Nebulance:
             return False
 
     async def get_additional_checks(self, meta: Meta) -> bool:
-        passed = True
         if meta.category != "TV":
             if meta.tvmaze_id != 0:
                 logger.info(f"{self.tracker}: [red]Only TV or TV Movies are allowed at {self.tracker}, this has a tvmaze ID[/red]")
-                passed = False
+                if not await confirm_override(meta, "Do you want to upload it?"):
+                    return False
             else:
                 if not meta.unattended:
                     logger.info(f"{self.tracker}: [red]Only TV Is allowed at {self.tracker}[/red]")
@@ -195,7 +213,7 @@ class Nebulance:
                 logger.info(f"{self.tracker}: [bold red]does not allow raw discs[/bold red]")
             return False
 
-        return passed
+        return True
 
     async def search_existing(self, meta: Meta) -> list[dict[str, Any]] | bool:
         dupes: list[dict[str, Any]] = []

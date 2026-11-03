@@ -63,9 +63,9 @@ def test_editor_failure_keeps_the_description_instead_of_aborting(tmp_path, monk
     assert asyncio.run(edit_description(_meta(tmp_path), "notes", "AITHER")) is None
 
 
-def test_webui_tracker_description_goes_to_the_panel_without_a_prompt(tmp_path, monkeypatch):
+def test_webui_tracker_description_goes_to_the_upload_panel(tmp_path, monkeypatch):
     monkeypatch.setenv("UA_WEBUI_ACTIVE", "1")
-    monkeypatch.setattr(get_tracker_data, "prompt_in_thread", AsyncMock(side_effect=AssertionError("no prompt in the WebUI")))
+    monkeypatch.setattr(get_tracker_data, "prompt_in_thread", AsyncMock(return_value=""))
     meta = _meta(tmp_path)
     candidate = Meta(base_dir=str(tmp_path), uuid="isolated-candidate", description="Deleted scenes notes")
 
@@ -78,6 +78,7 @@ def test_webui_tracker_description_goes_to_the_panel_without_a_prompt(tmp_path, 
 
 def test_webui_tracker_description_keeps_a_draft_the_user_already_edited(tmp_path, monkeypatch):
     monkeypatch.setenv("UA_WEBUI_ACTIVE", "1")
+    monkeypatch.setattr(get_tracker_data, "prompt_in_thread", AsyncMock(return_value=""))
     meta = _meta(tmp_path)
     description_review.save_review(tmp_path / "tmp" / "edit-test", "my edit", 3)
     candidate = Meta(base_dir=str(tmp_path), uuid="isolated-candidate", description="Second tracker text")

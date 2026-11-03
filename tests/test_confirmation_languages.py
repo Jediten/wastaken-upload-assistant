@@ -28,7 +28,7 @@ def test_detected_languages_survive_repeated_confirmation_corrections(tmp_path, 
     else:
         (release_dir / "MEDIAINFO.txt").write_text("Audio\nFormat : E-AC-3\nLanguage : English\nText\nFormat : UTF-8\nLanguage : Spanish\n", encoding="utf-8")
     ask_string = Mock(side_effect=AssertionError("Detected languages must not prompt for manual input"))
-    monkeypatch.setattr("src.languages.cli_ui.ask_string", ask_string)
+    monkeypatch.setattr("src.manual_input.cli_ui.ask_string", ask_string)
     manager = LanguagesManager()
     asyncio.run(manager.process_desc_language(meta))
     assert meta.audio_languages == ["English"]
@@ -47,10 +47,8 @@ def test_detected_languages_survive_repeated_confirmation_corrections(tmp_path, 
         assert meta.subtitle_languages == ["Spanish"]
         assert meta.service == "AMZN"
         common = Common(config)
-        assert asyncio.run(common.check_language_requirements(meta, "LST", ["English"], check_audio=True, check_subtitle=True))
-        assert asyncio.run(common.check_language_requirements(
-            meta, "AITHER", [], original_language=True, original_required=True
-        ))
+        assert asyncio.run(common.check_language_requirements(meta, "LST", ["English"], check_audio=True, check_subtitle=True, prompt_on_failure=False))
+        assert asyncio.run(common.check_language_requirements(meta, "AITHER", [], original_language=True, original_required=True, prompt_on_failure=False))
     ask_string.assert_not_called()
 
 
@@ -62,7 +60,7 @@ def test_manually_entered_languages_survive_confirmation_correction(tmp_path, mo
     init_meta(prep, meta, "cli")
     (tmp_path / "tmp" / meta.uuid / "MEDIAINFO.txt").write_text("Audio\nFormat : E-AC-3\nText\nFormat : UTF-8\n", encoding="utf-8")
     ask_string = Mock(side_effect=["English, French", "Spanish"])
-    monkeypatch.setattr("src.languages.cli_ui.ask_string", ask_string)
+    monkeypatch.setattr("src.manual_input.cli_ui.ask_string", ask_string)
     manager = LanguagesManager()
     asyncio.run(manager.process_desc_language(meta))
     assert ask_string.call_count == 2
@@ -92,7 +90,7 @@ def test_hardcoded_subtitle_correction_updates_checked_languages(tmp_path, monke
     audio_language = "" if manual_audio else "Language : English\n"
     (tmp_path / "tmp" / meta.uuid / "MEDIAINFO.txt").write_text(f"Audio\nFormat : E-AC-3\n{audio_language}", encoding="utf-8")
     ask_string = Mock(side_effect=["English"] if manual_audio else AssertionError("Unexpected language prompt"))
-    monkeypatch.setattr("src.languages.cli_ui.ask_string", ask_string)
+    monkeypatch.setattr("src.manual_input.cli_ui.ask_string", ask_string)
     manager = LanguagesManager()
     asyncio.run(manager.process_desc_language(meta))
     assert meta.audio_languages == ["English"]
@@ -111,9 +109,7 @@ def test_hardcoded_subtitle_correction_updates_checked_languages(tmp_path, monke
         assert meta.no_subs is False
         assert meta.audio_languages == ["English"]
         assert bool(meta.write_audio_languages) is manual_audio
-        assert asyncio.run(Common(config).check_language_requirements(
-            meta, "LST", [language], check_subtitle=True
-        ))
+        assert asyncio.run(Common(config).check_language_requirements(meta, "LST", [language], check_subtitle=True, prompt_on_failure=False))
     assert ask_string.call_count == int(manual_audio)
 
 
@@ -130,7 +126,7 @@ def test_category_correction_runs_previously_inapplicable_language_check(tmp_pat
     init_meta(prep, meta, "cli")
     (tmp_path / "tmp" / meta.uuid / "MEDIAINFO.txt").write_text("Audio\nFormat : E-AC-3\nLanguage : English\nText\nFormat : UTF-8\nLanguage : Spanish\n", encoding="utf-8")
     ask_string = Mock(side_effect=AssertionError("Detected languages must not prompt for manual input"))
-    monkeypatch.setattr("src.languages.cli_ui.ask_string", ask_string)
+    monkeypatch.setattr("src.manual_input.cli_ui.ask_string", ask_string)
     manager = LanguagesManager()
     asyncio.run(manager.process_desc_language(meta))
     assert meta.audio_languages == []
@@ -146,9 +142,7 @@ def test_category_correction_runs_previously_inapplicable_language_check(tmp_pat
     assert meta.language_checked is True
     assert meta.audio_languages == ["English"]
     assert meta.subtitle_languages == ["Spanish"]
-    assert asyncio.run(Common(config).check_language_requirements(
-        meta, "AITHER", [], original_language=True, original_required=True
-    ))
+    assert asyncio.run(Common(config).check_language_requirements(meta, "AITHER", [], original_language=True, original_required=True, prompt_on_failure=False))
     ask_string.assert_not_called()
 
 

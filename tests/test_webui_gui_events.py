@@ -117,6 +117,31 @@ def test_oversized_events_are_not_written(gui_env, capsys, monkeypatch) -> None:
     assert capsys.readouterr().out == ""
 
 
+def test_large_events_are_written_in_pieces_a_console_takes_whole(gui_env, monkeypatch) -> None:
+    # An unbuffered Windows console drops the end of a write over 16 KB.
+    writes: list[str] = []
+
+    class Console:
+        def write(self, text: str) -> int:
+            writes.append(text)
+            return len(text)
+
+        def flush(self) -> None:
+            pass
+
+    monkeypatch.setattr(sys, "stdout", Console())
+    previews = [{"tracker": f"FAKE{index}", "fields": [{"key": "name", "value": "x" * 250}]} for index in range(100)]
+
+    with webui_events.prompt_context(kind="confirm", payloads=previews):
+        webui_events.prompt_open("yes_no", "Is this correct?")
+
+    output = "".join(writes)
+    assert len(output) > 16384
+    assert max(len(text) for text in writes) <= webui_events.STDOUT_WRITE_CHUNK
+    [event] = _events(output)
+    assert event["context"]["payloads"] == previews
+
+
 def test_stages_remember_which_one_to_fail(gui_env, capsys) -> None:
     webui_events.stage("screens", "start")
     webui_events.fail_active_stage()
@@ -539,3 +564,54 @@ def test_numbered_options_carry_a_hint_and_only_country_flag_codes(gui_env, caps
     (opened,) = _events(capsys.readouterr().out)
     assert [detail["flag"] for detail in opened["context"]["details"]] == ["us", "", ""]
     assert opened["context"]["hint"] == "Why this matters.\nWhat a and n do."
+
+
+def test_field_prompts_keep_full_description_previews_and_multiline_hints(gui_env, capsys) -> None:
+    description = "Line one of a fictional tracker description.\n" * 15
+    hint = "Line one of a fictional comparison log.\n" * 12
+    with webui_events.field_prompt(
+        "Tracker description",
+        {"Tracker": "FAKE", "Description": description},
+        focus="Description",
+        hint=hint,
+        actions=[("", "Keep it as is"), ("d", "Discard")],
+    ):
+        webui_events.prompt_open("text", "Enter 'd' to discard, or press Enter to keep it as is: ")
+
+    (opened,) = _events(capsys.readouterr().out)
+    assert opened["context"]["kind"] == "field"
+    assert opened["context"]["summary"]["Description"] == description.strip()
+    assert opened["context"]["hint"] == hint.strip()
+    assert len(opened["context"]["summary"]["Description"]) > 300
+    assert len(opened["context"]["hint"]) > 300
+
+
+@pytest.mark.asyncio
+async def test_bdinfo_comparison_emits_tracker_notices_for_gui_dupe_prompt(gui_env, capsys, monkeypatch) -> None:
+    from src.meta import Meta
+    from src.uphelper import UploadHelper
+
+    helper = UploadHelper({"DEFAULT": {}})
+    meta = Meta({"is_disc": "BDMV", "name": "Fictional.Film.2020.COMPLETE.BLURAY-FAKEGRP"})
+
+    async def always_yes(*_args, **_kwargs) -> bool:
+        return True
+
+    monkeypatch.setattr(helper, "prompt_yes_no", always_yes)
+    monkeypatch.setattr("src.uphelper.has_bdinfo_content", lambda _entry: True)
+    monkeypatch.setattr(
+        "src.uphelper.compare_bdinfo",
+        lambda _meta, _entry, _tracker: (
+            "[yellow]Audio track count differs on Fictional.Film.2020[/yellow]",
+            "[green]Playlist length matches: 01:45:00[/green]",
+        ),
+    )
+
+    await helper.ask_bdinfo_comparison(meta, [{"name": "Fictional.Film.2020.COMPLETE.BLURAY-OTHERGRP"}], "FAKE")
+
+    notices = [event for event in _events(capsys.readouterr().out) if event["kind"] == "notice"]
+    assert [(notice["tracker"], notice["text"]) for notice in notices] == [
+        ("FAKE", "Audio track count differs on Fictional.Film.2020"),
+        ("FAKE", "Playlist length matches: 01:45:00"),
+    ]
+

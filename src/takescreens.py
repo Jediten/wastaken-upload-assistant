@@ -138,8 +138,12 @@ def _xxx_contact_sheet_animated_stream(video_path: Path, frame_count: int, durat
     return ffmpeg.filter(rows_streams, "vstack", inputs=rows)
 
 
-async def xxx_contact_sheets(paths: list[str], folder_id: str, base_dir: str, meta: Meta, capture_group: str = "main") -> list[str]:
-    """Create one evenly sampled contact sheet for each selected XXX video."""
+async def xxx_contact_sheets(paths: list[str], folder_id: str, base_dir: str, meta: Meta, capture_group: str = "main", extra_screens: int = 0) -> list[str]:
+    """Create one evenly sampled contact sheet for each selected XXX video.
+
+    ``extra_screens`` asks for that many frames beyond the current manifest, for
+    callers that must replace screenshots they cannot use.
+    """
     rows, columns, max_videos = xxx_contact_sheet_settings()
     animated_webp, animation_seconds = xxx_contact_sheet_animation_settings()
     video_paths = [Path(path) for path in paths if Path(path).is_file()][:max_videos]
@@ -192,10 +196,12 @@ async def xxx_contact_sheets(paths: list[str], folder_id: str, base_dir: str, me
         sheets = [str(path) for path in registered]
     normal_screens = xxx_single_file_screens()
     if len(video_paths) == 1 and normal_screens:
-        existing_in_group = len(manifest_files(base_dir, folder_id, capture_group))
-        screens_to_request = max(0, normal_screens + existing_in_group)
+        # A fixed target keeps reruns from adding one more frame every time.
+        # Replacements are forced so the hosted-image cutoff cannot skip them.
+        force_capture = extra_screens > 0
+        screens_to_request = extra_screens if force_capture else len(sheets) + normal_screens
         await screenshots(
-            str(video_paths[0]), video_paths[0].name, folder_id, base_dir, meta, screens_to_request, False, cleanup_after_capture=False, capture_group=capture_group
+            str(video_paths[0]), video_paths[0].name, folder_id, base_dir, meta, screens_to_request, force_capture, cleanup_after_capture=False, capture_group=capture_group
         )
     meta.screens = len(manifest_files(base_dir, folder_id, capture_group))
     return sheets
@@ -914,10 +920,14 @@ async def dvd_screenshots(
     height: float = 0.0
     frame_rate: float = 24.0
     ifo_duration = 0.0
+    pgc_durations: list[float] = []
     tracks: list[Any] = []
     tracks.extend(cast(list[Any], getattr(ifo_mi, "tracks", [])))
     for track in tracks:
-        if track.track_type == "Video":
+        if track.track_type == "Menu":
+            with contextlib.suppress(TypeError, ValueError):
+                pgc_durations.append(float(track.duration) / 1000)
+        elif track.track_type == "Video":
             if isinstance(track.duration, str):
                 durations = [float(d) for d in track.duration.split(" / ")]
                 ifo_duration = max(durations) / 1000
@@ -929,6 +939,10 @@ async def dvd_screenshots(
             width = float(track.width)
             height = float(track.height)
             frame_rate = float(track.frame_rate)
+    # MediaInfo reports the sum of every program chain as the IFO video duration, which on
+    # episodic discs far exceeds the video in the VOBs; seek within the longest chain instead.
+    if pgc_durations and 0 < max(pgc_durations) < ifo_duration:
+        ifo_duration = max(pgc_durations)
     meta.frame_rate = frame_rate
     w_sar, h_sar = screenshot_par_scale_factors(width, height, par, dar, should_scale_dvd_screenshots_for_par())
 
@@ -1455,14 +1469,14 @@ async def extract_document_cover(path: str, dest_path: str) -> Path | None:
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
     if extension == "pdf":
-        import fitz  # PyMuPDF
+        import pymupdf
 
         def _render_pdf_cover() -> Path | None:
-            with fitz.open(path) as doc:
+            with pymupdf.open(path) as doc:
                 if len(doc) == 0:
                     return None
                 page = doc[0]
-                pix = page.get_pixmap(matrix=fitz.Matrix(2.0, 2.0))
+                pix = page.get_pixmap(matrix=pymupdf.Matrix(2.0, 2.0))
                 pix.save(output_path)
                 return output_path
 
@@ -1638,6 +1652,16 @@ def find_ebook_info_page(doc: Any) -> int | None:
     return copyright_page
 
 
+def find_ebook_contents_page(doc: Any) -> int | None:
+    """Table of contents page, from the outline, a page heading or dotted leaders."""
+    from src.book_extractors import find_contents_page
+
+    contents_page = find_contents_page(doc)
+    if contents_page is not None:
+        logger.debug(f"[cyan]Using table of contents page {contents_page} as an ebook screenshot[/cyan]")
+    return contents_page
+
+
 COMIC_IMAGE_SUFFIXES = (".jpg", ".jpeg", ".png", ".gif", ".bmp", ".webp")
 
 
@@ -1687,11 +1711,41 @@ def _write_comic_page(archive: Any, name: str, dest_stem: Path, force_suffix: st
     return dest_path
 
 
+def _lone_image_clip(page: Any) -> tuple[Any, float] | None:
+    """Return the area and native zoom of the only image on a text-free page when it fills under half of it.
+
+    MuPDF often lays out EPUB cover pages (percentage or viewport heights) as a
+    small image at the top of a blank page.
+    """
+    import pymupdf
+
+    if page.get_text().strip() or page.first_annot:
+        return None
+    images = page.get_image_info()
+    if len(images) != 1:
+        return None
+    # Image and drawing boxes are unrotated page coordinates; get_pixmap clips in rotated ones.
+    bbox = pymupdf.Rect(images[0]["bbox"])
+    if any(not bbox.contains(drawing["rect"]) for drawing in page.get_drawings()):
+        return None
+    clip = bbox * page.rotation_matrix & page.rect
+    if clip.is_empty or clip.get_area() >= page.rect.get_area() / 2:
+        return None
+    return clip, min(images[0]["width"] / bbox.width, images[0]["height"] / bbox.height)
+
+
 def _render_document_page(doc: Any, page_num: int, dest_stem: Path, suffix: str = ".png") -> Path:
-    import fitz  # PyMuPDF
+    import pymupdf
 
     dest_path = dest_stem.with_name(f"{dest_stem.name}{suffix}")
-    pix = doc[page_num].get_pixmap(matrix=fitz.Matrix(2.0, 2.0))
+    page = doc[page_num]
+    zoom, clip = 2.0, None
+    lone_image = _lone_image_clip(page)
+    if lone_image:
+        clip, native_zoom = lone_image
+        # Fill the normal page render size without upscaling past the image's own resolution.
+        zoom = max(zoom, min(zoom * page.rect.width / clip.width, zoom * page.rect.height / clip.height, native_zoom))
+    pix = page.get_pixmap(matrix=pymupdf.Matrix(zoom, zoom), clip=clip)
     if suffix == ".png":
         pix.save(dest_path)
     else:
@@ -1701,7 +1755,7 @@ def _render_document_page(doc: Any, page_num: int, dest_stem: Path, suffix: str 
 
 def capture_ebook_page(path: str, dest_stem: Path, exclude_pages: set[int], force_suffix: str | None = None) -> tuple[Path, int]:
     """Write one random page of an ebook/comic that is not in `exclude_pages` (any page once all are used)."""
-    import fitz  # PyMuPDF
+    import pymupdf
 
     if Path(path).suffix.lower() in {".cbz", ".cbr"}:
         opened = _open_comic_archive(path)
@@ -1715,8 +1769,8 @@ def capture_ebook_page(path: str, dest_stem: Path, exclude_pages: set[int], forc
             return _write_comic_page(archive, image_files[page], dest_stem, force_suffix), page
 
     with contextlib.suppress(Exception):
-        fitz.TOOLS.mupdf_display_errors(False)
-    with fitz.open(path) as doc:
+        pymupdf.TOOLS.mupdf_display_errors(False)
+    with pymupdf.open(path) as doc:
         if len(doc) == 0:
             raise ValueError("The book does not have pages")
         page = select_ebook_pages(len(doc), 1, [], exclude_pages)[0]
@@ -1737,10 +1791,10 @@ async def generate_ebook_screenshots(
     Pages already registered (for example by the early background capture and
     then reviewed in the Web UI) are reused unless `meta.retake` is set.
     """
-    import fitz  # PyMuPDF
+    import pymupdf
 
     with contextlib.suppress(Exception):
-        fitz.TOOLS.mupdf_display_errors(False)
+        pymupdf.TOOLS.mupdf_display_errors(False)
 
     output_dir = screenshots_dir(base_dir, folder_id).resolve()
     sanitized_filename = await sanitize_filename(filename)
@@ -1818,7 +1872,7 @@ async def generate_ebook_screenshots(
                 except Exception as e:
                     logger.debug(f"[yellow]Warning: EPUB cover extraction failed: {e}[/yellow]")
 
-            with fitz.open(path) as doc:
+            with pymupdf.open(path) as doc:
                 total_pages = len(doc)
                 if total_pages == 0:
                     logger.info(f"[yellow]{extension.upper()} does not have pages[/yellow]")
@@ -1829,7 +1883,12 @@ async def generate_ebook_screenshots(
 
                 if capture_pages:
                     info_page = await asyncio.to_thread(find_ebook_info_page, doc) if num_screens > 1 else None
-                    selected_pages = select_ebook_pages(total_pages, num_screens, [0] if info_page is None else [0, info_page])
+                    fixed_pages = list(dict.fromkeys(page for page in (0, info_page) if page is not None))
+                    # Only look for the contents page when a screenshot slot is left for it.
+                    contents_page = await asyncio.to_thread(find_ebook_contents_page, doc) if num_screens > len(fixed_pages) else None
+                    if contents_page is not None:
+                        fixed_pages.append(contents_page)
+                    selected_pages = select_ebook_pages(total_pages, num_screens, fixed_pages)
                     for i, page_num in enumerate(selected_pages):
                         scr_path = await process_page(page_num, output_dir / f"{sanitized_filename}-{i}")
                         screenshots.append(scr_path)
@@ -2956,8 +3015,8 @@ class TakeScreensManager:
     def xxx_contact_sheet_animation_settings(self) -> tuple[bool, float]:
         return xxx_contact_sheet_animation_settings()
 
-    async def xxx_contact_sheets(self, paths: list[str], folder_id: str, base_dir: str, meta: Meta, capture_group: str = "main") -> list[str]:
-        return await xxx_contact_sheets(paths, folder_id, base_dir, meta, capture_group)
+    async def xxx_contact_sheets(self, paths: list[str], folder_id: str, base_dir: str, meta: Meta, capture_group: str = "main", extra_screens: int = 0) -> list[str]:
+        return await xxx_contact_sheets(paths, folder_id, base_dir, meta, capture_group, extra_screens)
 
     async def xxx_fallback_cover(self, paths: list[str], folder_id: str, base_dir: str, meta: Meta, random_frame: bool = False) -> str | None:
         return await xxx_fallback_cover(paths, folder_id, base_dir, meta, random_frame)
