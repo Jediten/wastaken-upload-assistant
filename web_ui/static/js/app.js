@@ -10035,7 +10035,12 @@ function AudionutsUAGUI() {
     const asked = String(question || "").trim();
     while (lines.length) {
       const last = lines[lines.length - 1].trim();
-      if (last === ">" || last.startsWith("> ") || (asked && last === asked)) {
+      if (
+        last === ">" ||
+        last.startsWith("> ") ||
+        (asked &&
+          (last === asked || (last.startsWith("::") && last.includes(asked))))
+      ) {
         lines.pop();
       } else {
         break;
@@ -10827,10 +10832,13 @@ function AudionutsUAGUI() {
           {renderRunGuiActionButtons(actions, answer, disabled)}
         </div>
       ) : null;
-    // A free-text question without its own list shows the output before it:
-    // the list it refers to, or the text (e.g. a description) being decided on.
+    // A question without its own list shows the output before it: the list it
+    // refers to, the text being decided on, or the reason a yes/no is asked.
     const recent =
-      !details && type === "text" && !options.length && !checkMessages.length
+      !details &&
+      (type === "text" || type === "yes_no") &&
+      !options.length &&
+      !checkMessages.length
         ? getRecentTerminalLines(question)
         : [];
     const recentOutput = recent.length ? (

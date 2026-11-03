@@ -363,7 +363,16 @@ async def update_metadata_from_tracker(
                     logger.info(f"[green]{tracker_name} IMDb ID found: tt{str(imdb_id).zfill(7)}[/green]")
 
                 if not meta.unattended:
-                    if await prompt_user_for_confirmation("Do you want to use this ID data from PASSTHEPOPCORN?"):
+                    with webui_events.field_prompt(
+                        f"{tracker_name} metadata",
+                        {
+                            "Tracker": tracker_name,
+                            "IMDb ID": f"tt{str(imdb_id).zfill(7)}" if imdb_id else "",
+                            "Torrent ID": str(ptp_torrent_id),
+                        },
+                    ):
+                        use_ptp_ids = await prompt_user_for_confirmation("Do you want to use this ID data from PASSTHEPOPCORN?")
+                    if use_ptp_ids:
                         meta.imdb_id = imdb_id
                         found_match = True
                         meta.set_tracker_ids({tracker_name: ptp_torrent_id})
@@ -831,7 +840,11 @@ async def handle_image_list(meta: Meta, tracker_name: str, valid_images: Sequenc
         if meta.unattended:
             keep_images = True
         else:
-            keep_images = await prompt_user_for_confirmation(f"Do you want to keep the images found on {tracker_name}?")
+            with webui_events.field_prompt(
+                f"Images from {tracker_name}",
+                {"Tracker": tracker_name, "Images": "\n".join(str(img.get("img_url")) for img in meta.image_list)},
+            ):
+                keep_images = await prompt_user_for_confirmation(f"Do you want to keep the images found on {tracker_name}?")
             if not keep_images:
                 meta.image_list = []
                 meta.image_sizes = {}
