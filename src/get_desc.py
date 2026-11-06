@@ -702,7 +702,7 @@ class DescriptionBuilder:
                 async with aiofiles.open(cache_file_path, encoding="utf-8") as f:
                     return await f.read()
 
-        video_file = meta.filelist[0]
+        video_file = meta.video if meta.mediainfo_file and meta.video else meta.filelist[0]
 
         if meta.mediainfo:
             media_info_content = self.format_short_mediainfo_json(meta.mediainfo, video_file)

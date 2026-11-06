@@ -866,6 +866,14 @@ class Args:
             help="Use the largest video file for processing instead of the first video file found",
         )
         parser.add_argument(
+            "-mif",
+            "--mediainfo-file",
+            dest="mediainfo_file",
+            nargs=1,
+            required=False,
+            help="Use this file from a pack for mediainfo, by name or episode (e.g. S01E02)",
+        )
+        parser.add_argument(
             "--tracker-id",
             action="append",
             metavar="TRACKER=ID|URL",

@@ -58,6 +58,7 @@ def meta(**overrides):
         "base_dir": ".",
         "uuid": "test",
         "mediainfo": {},
+        "mediainfo_file": None,
         "discs": [],
         "ua_signature": "Upload-Assistant",
         "debug": False,

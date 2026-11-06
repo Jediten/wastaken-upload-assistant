@@ -742,6 +742,7 @@ const argumentSections = [
       { flag: "--hardcoded-subs-language", placeholder: "LANG" },
       "--webdv",
       "--sorted-filelist",
+      { flag: "--mediainfo-file", placeholder: "S01E02 or FILENAME" },
       "--keep-folder",
     ],
   },

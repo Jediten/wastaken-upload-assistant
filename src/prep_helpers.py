@@ -582,7 +582,7 @@ async def process_media_files(prep_instance: Any, meta: Meta, videoloc: str, bdi
             videopath, filelist, search_term, search_file_folder = prep_instance._resolve_game_filelist(meta, videoloc)
             video = videopath
         else:
-            videopath, meta.filelist = await video_manager.get_video(videoloc, meta.sorted_filelist)
+            videopath, meta.filelist = await video_manager.get_video(videoloc, meta.sorted_filelist, meta.mediainfo_file)
             if not videopath or not meta.filelist:
                 raise ValueError(f"No video files found in {videoloc}")
             filelist = meta.filelist

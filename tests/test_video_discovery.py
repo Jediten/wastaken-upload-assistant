@@ -6,6 +6,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 
+from src.args import Args
 from src.meta import Meta
 from src.prep_helpers import detect_disc_and_category, process_media_files
 from src.video import VideoManager
@@ -75,3 +76,40 @@ def test_empty_directory_stops_before_scene_or_mediainfo_processing(tmp_path, mo
 
     scene.assert_not_awaited()
     export.assert_not_awaited()
+
+
+def _pack(tmp_path):
+    release = tmp_path / "Homestead.The.Series.S01.1080p.WEB-DL-GRP"
+    release.mkdir()
+    episodes = []
+    for episode in range(1, 12):
+        path = release / f"Homestead.The.Series.S01E{episode:02}.1080p.WEB-DL-GRP.mkv"
+        path.write_bytes(b"video" * (12 - episode))
+        episodes.append(str(path.resolve()))
+    return release, episodes
+
+
+@pytest.mark.parametrize("sort_by_size", [False, True])
+@pytest.mark.parametrize("wanted", ["S01E02", "s1e2", "E02", "e2", "Homestead.The.Series.S01E02.1080p.WEB-DL-GRP.mkv", "S01E02.1080p"])
+def test_mediainfo_file_picks_episode(tmp_path, sort_by_size, wanted):
+    release, episodes = _pack(tmp_path)
+
+    video, filelist = asyncio.run(VideoManager().get_video(str(release), sort_by_size, wanted))
+
+    assert video == episodes[1]
+    assert filelist == episodes
+
+
+@pytest.mark.parametrize("wanted", ["S01E12", "S02E02", "S01", "1080p", "nothing"])
+def test_mediainfo_file_falls_back_without_a_single_match(tmp_path, wanted):
+    release, episodes = _pack(tmp_path)
+
+    video, _ = asyncio.run(VideoManager().get_video(str(release), False, wanted))
+
+    assert video == episodes[0]
+
+
+def test_mediainfo_file_flag_parses():
+    meta, _, _ = Args({"DEFAULT": {"screens": 1}}).parse(["--webui", "--mediainfo-file", "S01E02"], Meta())
+
+    assert meta.mediainfo_file == "S01E02"

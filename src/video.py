@@ -127,7 +127,22 @@ class VideoManager:
             video_codec = f"MPEG-{mi_dict['media']['track'][1].get('Format_Version')}"
         return video_encode, video_codec, has_encode_settings, bit_depth
 
-    async def get_video(self, videoloc: str, sorted_filelist: bool = False) -> tuple[str, list[str]]:
+    @staticmethod
+    def pick_mediainfo_file(filelist: list[str], wanted: str) -> str | None:
+        wanted = wanted.strip().lower()
+        names = {f: Path(f).name.lower() for f in filelist}
+        matches = [f for f, name in names.items() if name == wanted]
+        if not matches:
+            episode = re.fullmatch(r"(?:s(\d+))?e(\d+)", wanted)
+            if episode:
+                season = rf"s0*{int(episode.group(1))}" if episode.group(1) else r"(?:s\d+)?"
+                pattern = rf"(?<![a-z0-9]){season}e0*{int(episode.group(2))}(?!\d)"
+                matches = [f for f, name in names.items() if re.search(pattern, name)]
+            else:
+                matches = [f for f, name in names.items() if wanted in name]
+        return matches[0] if len(matches) == 1 else None
+
+    async def get_video(self, videoloc: str, sorted_filelist: bool = False, mediainfo_file: str | None = None) -> tuple[str, list[str]]:
         filelist: list[str] = []
         videoloc = str(Path(videoloc).resolve())
         logger.debug(f"[blue]Video location: [yellow]{videoloc}[/yellow][/blue]")
@@ -203,6 +218,13 @@ class VideoManager:
             except IndexError:
                 logger.info("[bold red]No Video files found")
                 return "", []
+            if mediainfo_file:
+                picked = self.pick_mediainfo_file(filelist, mediainfo_file)
+                if picked:
+                    video = picked
+                    logger.info(f"[green]Using {Path(picked).name} for mediainfo[/green]")
+                else:
+                    logger.warning(f"[yellow]--mediainfo-file {mediainfo_file} didn't match exactly one file, using {Path(video).name}[/yellow]")
         else:
             video = videoloc
             filelist.append(videoloc)
