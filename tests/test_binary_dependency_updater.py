@@ -62,7 +62,7 @@ def test_asset_names_apply_upstream_version_formats() -> None:
 def test_runtime_and_docker_paths_share_version_pins() -> None:
     assert inspect.signature(PestoBinaryManager.ensure_pesto_binary).parameters["version"].default == DEPENDENCY_VERSIONS["pesto"]
     assert inspect.signature(BDInfoBinaryManager.ensure_bdinfo_binary).parameters["version"].default == DEPENDENCY_VERSIONS["bdinfo"]
-    assert BDINFO_VERSION == DEPENDENCY_VERSIONS["bdinfo"]
+    assert DEPENDENCY_VERSIONS["bdinfo"] == BDINFO_VERSION
     assert inspect.signature(MkbrrBinaryManager.ensure_mkbrr_binary).parameters["version"].default == DEPENDENCY_VERSIONS["mkbrr"]
     assert inspect.signature(MkbrrBinaryManager.download_mkbrr_for_docker).parameters["version"].default == DEPENDENCY_VERSIONS["mkbrr"]
 
@@ -107,6 +107,65 @@ async def test_runtime_download_urls_derive_asset_names_from_version(
     with pytest.raises(Exception, match="StopDownload"):
         await manager(tmp_path, version=version)  # type: ignore[operator]
     assert urls[0].endswith(f"/{version}/{expected_asset}")
+
+
+@pytest.mark.asyncio
+async def test_bdinfo_treats_android_as_linux(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr("bin.get_bdinfo.platform.system", lambda: "Android")
+    monkeypatch.setattr("bin.get_bdinfo.platform.machine", lambda: "aarch64")
+    version = DEPENDENCY_VERSIONS["bdinfo"]
+    binary = tmp_path / "bin" / "bdinfo" / "linux" / "arm64" / "bdinfo"
+    binary.parent.mkdir(parents=True)
+    binary.write_bytes(b"")
+    binary.chmod(0o755)
+    (binary.parent / version).write_text("installed", encoding="utf-8")
+
+    assert await BDInfoBinaryManager.ensure_bdinfo_binary(tmp_path, version) == str(binary)
+
+
+@pytest.mark.asyncio
+async def test_mkbrr_treats_android_as_linux(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr("bin.get_mkbrr.platform.system", lambda: "Android")
+    monkeypatch.setattr("bin.get_mkbrr.platform.machine", lambda: "aarch64")
+    monkeypatch.setattr("bin.get_mkbrr.shutil.which", lambda _command: None)
+    version = DEPENDENCY_VERSIONS["mkbrr"]
+    binary = tmp_path / "bin" / "mkbrr" / "linux" / "arm64" / "mkbrr"
+    binary.parent.mkdir(parents=True)
+    binary.write_bytes(b"")
+    binary.chmod(0o755)
+    (binary.parent / version).write_text("installed", encoding="utf-8")
+
+    assert await MkbrrBinaryManager.ensure_mkbrr_binary(tmp_path, version) == str(binary)
+
+
+@pytest.mark.asyncio
+async def test_mkbrr_android_download_selects_linux_build(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    version = DEPENDENCY_VERSIONS["mkbrr"]
+    urls: list[str] = []
+
+    class StopDownloadError(Exception):
+        pass
+
+    class Client:
+        async def __aenter__(self) -> Client:
+            return self
+
+        async def __aexit__(self, *_args: object) -> None:
+            return None
+
+        def stream(self, _method: str, url: str, **_kwargs: object) -> None:
+            urls.append(url)
+            raise StopDownloadError
+
+    monkeypatch.setattr("bin.get_mkbrr.platform.system", lambda: "Android")
+    monkeypatch.setattr("bin.get_mkbrr.platform.machine", lambda: "aarch64")
+    monkeypatch.setattr("bin.get_mkbrr.shutil.which", lambda _command: None)
+    monkeypatch.setattr("bin.get_mkbrr.httpx.AsyncClient", lambda **_kwargs: Client())
+
+    with pytest.raises(StopDownloadError):
+        await MkbrrBinaryManager.ensure_mkbrr_binary(tmp_path, version)
+
+    assert urls == [f"https://github.com/autobrr/mkbrr/releases/download/{version}/mkbrr_{version[1:]}_linux_arm64.tar.gz"]
 
 
 def test_fetch_latest_accepts_a_complete_stable_release(monkeypatch: pytest.MonkeyPatch) -> None:

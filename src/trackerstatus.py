@@ -14,6 +14,7 @@ from src.cleanup import cleanup_manager
 from src.console import logger, prompt_in_thread
 from src.dupe_checking import DupeChecker
 from src.imdb import imdb_manager
+from src.manual_input import is_interactive
 from src.meta import Meta
 from src.metadata_searching import get_douban_id
 from src.slot_rules.registry import evaluate_slots
@@ -32,6 +33,28 @@ def merge_tracker_status(processed: dict[str, dict[str, Any]], existing: Mapping
     return merged
 
 
+async def run_tracker_checks(tracker: Any, meta: Meta) -> bool:
+    """Run a tracker's own upload rules (``get_additional_checks``); trackers without them pass.
+
+    The checks only report: they log why a release breaks a rule and return False.
+    Whether to upload anyway is decided by the caller.
+    """
+    check = getattr(tracker, "get_additional_checks", None)
+    if check is None:
+        return True
+    return bool(await check(meta) if inspect.iscoroutinefunction(check) else check(meta))
+
+
+# Skip reasons are short tokens so the statistics can group them; the run summary prints them in words.
+SKIP_REASON_TEXT = {
+    "missing_fields": "required metadata is missing",
+    "skip_upload": "tracker marked skip_upload earlier in processing",
+    "claimed": "release appears to be claimed/requested on this tracker",
+    "failed_checks": "failed the tracker's content/eligibility pre-checks (see its messages above)",
+    "search_error": "the duplicate search failed",
+}
+
+
 class TrackerStatusManager:
     def __init__(self, config: dict[str, Any]) -> None:
         self.config = config
@@ -44,19 +67,12 @@ class TrackerStatusManager:
         and explaining failures.  The upload decision belongs here so every
         tracker gets the same attended/unattended behaviour.
         """
-        check = getattr(tracker, "get_additional_checks", None)
-        if check is None:
-            return True
-
-        meta.override_declined = False
         with webui_events.capture_tracker_checks(tracker_name, logger) as messages:
-            result = await check(meta) if inspect.iscoroutinefunction(check) else check(meta)
+            result = await run_tracker_checks(tracker, meta)
         if result:
             return True
 
-        # A check that asked its own "upload anyway?" and got a no is not asked again.
-        # -uac (unattended confirm) still asks; plain unattended runs never do.
-        if not meta.override_declined and (not meta.get("unattended", False) or meta.get("unattended_confirm", False)) and not sys.stdin.closed:
+        if is_interactive(meta) and not sys.stdin.closed:
             try:
                 with webui_events.prompt_context(
                     tracker=tracker_name,
@@ -73,6 +89,21 @@ class TrackerStatusManager:
         status = meta.tracker_status.setdefault(tracker_name, {})
         status["status_message"] = "\n".join(messages) or status.get("status_message") or "Upload checks failed"
         return False
+
+    async def _proceed_after_search_error(self, tracker_name: str, error: Exception, meta: Meta, helper: Any) -> bool:
+        """Let an attended user continue when a tracker's duplicate search fails."""
+        message = f"Error searching for duplicates on {tracker_name}: {error}"
+        logger.info(f"[bold red]{message}[/bold red]")
+        if meta.get("unattended", False):
+            return False
+        try:
+            with webui_events.prompt_context(kind="tracker_checks", tracker=tracker_name, check_messages=[message]):
+                return await helper.prompt_yes_no(f"Duplicate check failed on {tracker_name}. Do you want to proceed with the upload anyway?", default=False)
+        except EOFError:
+            logger.info("\n[red]Exiting on user request (Ctrl+C)[/red]")
+            await cleanup_manager.cleanup()
+            cleanup_manager.reset_terminal()
+            sys.exit(1)
 
     async def process_all_trackers(self, meta: Meta) -> int:
         """Check selected trackers and retain their decisions and explanations in shared metadata."""
@@ -152,6 +183,10 @@ class TrackerStatusManager:
         async def process_single_tracker(tracker_name: str, shared_meta: Meta) -> tuple[str, dict[str, Any], str | None, Any]:
             """Check one isolated metadata copy and return its authoritative tracker result."""
             local_meta = copy.deepcopy(shared_meta)  # Ensure each task gets its own copy of meta
+            # A trump plan only survives the duplicate review that makes it.
+            async with meta_lock:
+                meta.trump_plans.pop(tracker_name, None)
+            local_meta.trump_plans.pop(tracker_name, None)
             local_tracker_status: dict[str, Any] = {"banned": False, "skipped": False, "dupe": False, "upload": False, "other": False, "skip_reason": ""}
             display_name = None
             tracker_class = None
@@ -167,14 +202,17 @@ class TrackerStatusManager:
                 tracker_class = tracker_class_map[tracker_name](config=self.config)
                 if tracker_name == "PASSTHEPOPCORN" and local_meta.get("imdb_id", 0) == 0:
                     local_tracker_status["skipped"] = True
+                    local_tracker_status["skip_reason"] = "missing_fields"
 
                 if not local_tracker_status["skipped"]:
-                    result = await tracker_setup.check_banned_group(tracker_class.tracker, tracker_class.banned_groups, local_meta, prompt_yes_no=helper.prompt_yes_no)
+                    result = await tracker_setup.check_banned_group(
+                        tracker_class.tracker, tracker_class.banned_groups, local_meta, prompt_yes_no=getattr(helper, "prompt_yes_no", None)
+                    )
                     local_tracker_status["banned"] = bool(result)
 
                 if local_meta["tracker_status"][tracker_name].get("skip_upload"):
                     local_tracker_status["skipped"] = True
-                    local_tracker_status["skip_reason"] = "tracker marked skip_upload earlier in processing"
+                    local_tracker_status["skip_reason"] = "skip_upload"
                 elif "skipped" not in local_meta and not local_tracker_status["skipped"]:
                     local_tracker_status["skipped"] = False
 
@@ -195,6 +233,7 @@ class TrackerStatusManager:
                     if book_missing:
                         logger.info(f"[yellow]{tracker_name}: Skipping upload because required BOOK fields are missing: {', '.join(book_missing)}[/yellow]")
                         local_tracker_status["skipped"] = True
+                        local_tracker_status["skip_reason"] = "missing_fields"
 
                 # Check for missing required GAME fields in unattended mode
                 elif local_meta.get("category") == "GAME" and local_meta.get("unattended", False):
@@ -207,6 +246,7 @@ class TrackerStatusManager:
                     if game_missing:
                         logger.info(f"[yellow]{tracker_name}: Skipping upload because required GAME fields are missing: {', '.join(game_missing)}[/yellow]")
                         local_tracker_status["skipped"] = True
+                        local_tracker_status["skip_reason"] = "missing_fields"
 
                 if not local_tracker_status["banned"] and not local_tracker_status["skipped"]:
                     claimed = await tracker_setup.get_torrent_claims(local_meta, tracker_name)
@@ -214,13 +254,13 @@ class TrackerStatusManager:
                     if claimed:
                         local_tracker_status["status_message"] = local_meta.tracker_status[tracker_name].get("status_message") or "Claimed release found on this tracker"
                         if not local_tracker_status["skip_reason"]:
-                            local_tracker_status["skip_reason"] = "release appears to be claimed/requested on this tracker (get_torrent_claims)"
+                            local_tracker_status["skip_reason"] = "claimed"
 
                     if tracker_name not in {"PASSTHEPOPCORN"} and not local_tracker_status["skipped"]:
                         should_continue = await self._run_additional_checks(tracker_name, tracker_class, local_meta, helper)
                         if not should_continue:
                             local_tracker_status["skipped"] = True
-                            local_tracker_status["skip_reason"] = "failed the tracker's content/eligibility pre-checks (get_additional_checks; see its messages above)"
+                            local_tracker_status["skip_reason"] = "failed_checks"
                             local_tracker_status["status_message"] = local_meta.tracker_status[tracker_name].get("status_message") or "Upload checks failed"
                             local_meta.skipping = tracker_name
 
@@ -240,35 +280,15 @@ class TrackerStatusManager:
                                 await record_event_async(
                                     "api", service=tracker_name, operation="search", outcome="error", duration_ms=(time.monotonic() - search_started) * 1000
                                 )
-                                logger.info(f"[bold red]Error searching for duplicates on {tracker_name}: {e}[/bold red]")
-                                if local_meta.get("unattended", False):
-                                    local_tracker_status["skipped"] = True
-                                    local_meta.skipping = tracker_name
-                                    dupes = []
+                                dupes = []
+                                if await self._proceed_after_search_error(tracker_name, e, local_meta, helper):
+                                    # set trackers here so that they are not double checked later with cross seeding
+                                    async with meta_lock:
+                                        meta.setdefault("dupe_checked_trackers", []).append(tracker_name)
                                 else:
-                                    try:
-                                        with webui_events.prompt_context(
-                                            kind="tracker_checks",
-                                            tracker=tracker_name,
-                                            check_messages=[f"Error searching for duplicates on {tracker_name}: {e}"],
-                                        ):
-                                            proceed_after_error = await helper.prompt_yes_no(
-                                                f"Duplicate check failed on {tracker_name}. Do you want to proceed with the upload anyway?", default=False
-                                            )
-                                        if proceed_after_error:
-                                            dupes = []
-                                            # set trackers here so that they are not double checked later with cross seeding
-                                            async with meta_lock:
-                                                meta.setdefault("dupe_checked_trackers", []).append(tracker_name)
-                                        else:
-                                            local_tracker_status["skipped"] = True
-                                            local_meta.skipping = tracker_name
-                                            dupes = []
-                                    except EOFError:
-                                        logger.info("\n[red]Exiting on user request (Ctrl+C)[/red]")
-                                        await cleanup_manager.cleanup()
-                                        cleanup_manager.reset_terminal()
-                                        sys.exit(1)
+                                    local_tracker_status["skipped"] = True
+                                    local_tracker_status["skip_reason"] = "search_error"
+                                    local_meta.skipping = tracker_name
                         else:
                             dupes = []
                     elif tracker_name == "PASSTHEPOPCORN":
@@ -276,7 +296,7 @@ class TrackerStatusManager:
                         should_continue = await self._run_additional_checks(tracker_name, ptp, local_meta, helper)
                         if not should_continue:
                             local_tracker_status["skipped"] = True
-                            local_tracker_status["skip_reason"] = "failed the tracker's content/eligibility pre-checks (get_additional_checks; see its messages above)"
+                            local_tracker_status["skip_reason"] = "failed_checks"
                             local_tracker_status["status_message"] = local_meta.tracker_status[tracker_name].get("status_message") or "Upload checks failed"
                             local_meta.skipping = tracker_name
 
@@ -294,32 +314,11 @@ class TrackerStatusManager:
                                 await record_event_async(
                                     "api", service=tracker_name, operation="search", outcome="error", duration_ms=(time.monotonic() - search_started) * 1000
                                 )
-                                logger.info(f"[bold red]Error searching for duplicates on {tracker_name}: {e}[/bold red]")
-                                if local_meta.get("unattended", False):
+                                dupes = []
+                                if not await self._proceed_after_search_error(tracker_name, e, local_meta, helper):
                                     local_tracker_status["skipped"] = True
+                                    local_tracker_status["skip_reason"] = "search_error"
                                     local_meta.skipping = tracker_name
-                                    dupes = []
-                                else:
-                                    try:
-                                        with webui_events.prompt_context(
-                                            kind="tracker_checks",
-                                            tracker=tracker_name,
-                                            check_messages=[f"Error searching for duplicates on {tracker_name}: {e}"],
-                                        ):
-                                            proceed_after_error = await helper.prompt_yes_no(
-                                                f"Duplicate check failed on {tracker_name}. Do you want to proceed with the upload anyway?", default=False
-                                            )
-                                        if proceed_after_error:
-                                            dupes = []
-                                        else:
-                                            local_tracker_status["skipped"] = True
-                                            local_meta.skipping = tracker_name
-                                            dupes = []
-                                    except EOFError:
-                                        logger.info("\n[red]Exiting on user request (Ctrl+C)[/red]")
-                                        await cleanup_manager.cleanup()
-                                        cleanup_manager.reset_terminal()
-                                        sys.exit(1)
                         else:
                             dupes = []
                     else:
@@ -329,6 +328,9 @@ class TrackerStatusManager:
                         if "initial_dupes" not in meta:
                             meta.initial_dupes = {}
                         meta.initial_dupes[tracker_name] = copy.deepcopy(dupes)
+                        title_releases = local_meta.get(f"{tracker_name}_title_releases")
+                        if isinstance(title_releases, list):
+                            meta.initial_title_releases[tracker_name] = copy.deepcopy(title_releases)
 
                     if ("skipping" not in local_meta or local_meta["skipping"] is None) and not local_tracker_status["skipped"]:
                         # Slot rules need the unfiltered results; the basic filter drops releases they compare against.
@@ -340,31 +342,16 @@ class TrackerStatusManager:
                         if is_dupe:
                             local_tracker_status["dupe"] = True
 
-                        matched_episode_ids = local_meta.get(f"{tracker_name}_matched_episode_ids", [])
-                        trumpable_id = local_meta.get("trumpable_id")
                         cross_seed_key = f"{tracker_name}_cross_seed"
                         cross_seed_value = local_meta.get(cross_seed_key) if cross_seed_key in local_meta else None
+                        trump_plan = local_meta.trump_plans.get(tracker_name)
 
                         # Only shared-state writes go under the lock
                         async with meta_lock:
-                            if matched_episode_ids:
-                                meta[f"{tracker_name}_matched_episode_ids"] = matched_episode_ids
-                            if trumpable_id:
-                                meta.trumpable_id = trumpable_id
                             if cross_seed_key in local_meta and cross_seed_value:
                                 meta[cross_seed_key] = cross_seed_value
-
-                        if tracker_name in ["AITHER", "LST"]:
-                            were_trumping = local_meta.get("were_trumping", False)
-                            trump_reason = local_meta.get("trump_reason")
-                            trumpable_id_after_dupe_check = local_meta.get(f"{tracker_name}_trumpable_id")
-                            async with meta_lock:
-                                if were_trumping:
-                                    meta.were_trumping = were_trumping
-                                if trump_reason:
-                                    meta.trump_reason = trump_reason
-                                if trumpable_id_after_dupe_check:
-                                    meta[f"{tracker_name}_trumpable_id"] = trumpable_id_after_dupe_check
+                            if trump_plan and not is_dupe:
+                                meta.trump_plans[tracker_name] = trump_plan
 
                     elif "skipping" in local_meta:
                         local_tracker_status["skipped"] = True
@@ -418,7 +405,8 @@ class TrackerStatusManager:
             logger.info("[red]Skipped due to specific tracker conditions:[/red]", extra={"ua_gui": False})
             for _skip_name in skipped_trackers:
                 _skip_status = tracker_status.get(_skip_name) or {}
-                _skip_reason = _skip_status.get("skip_reason") or "tracker-specific condition (see the messages above for the tracker's own note)"
+                _skip_token = _skip_status.get("skip_reason") or ""
+                _skip_reason = SKIP_REASON_TEXT.get(_skip_token, _skip_token or "tracker-specific condition (see the messages above for the tracker's own note)")
                 logger.info(f"  [bold yellow]{_skip_name}[/bold yellow]: [red]{_skip_reason}[/red]", extra={"ua_gui": False})
         if dupe_trackers:
             logger.info(f"[red]Found potential dupes on: [bold yellow]{', '.join(dupe_trackers)}[/bold yellow].\n", extra={"ua_gui": False})
