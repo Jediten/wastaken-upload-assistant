@@ -833,6 +833,12 @@ async def gather_book_prep(
                     setattr(meta, key, value)
                 if audible_data.get("year") and not cli_overrides["year"]:
                     meta.year = meta.search_year = audible_data["year"]
+                if (audible_genres := audible_data.get("genres")) and isinstance(audible_genres, list):
+                    if not cli_overrides["genres"]:
+                        meta.genres = list(audible_genres)
+                    if not cli_overrides["keywords"]:
+                        existing = [k for k in (meta.keywords or []) if str(k).strip().lower() != "audiobook"]
+                        meta.keywords = list(dict.fromkeys([*audible_genres, *existing]))
                 if audible_data.get("language") and not cli_overrides["book_language"]:
                     full, iso = resolve_book_language(audible_data["language"])
                     if is_valid_book_language(full, iso):

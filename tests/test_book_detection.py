@@ -90,6 +90,9 @@ def test_map_audiobook_keywords():
     assert map_audiobook_keywords("Action & Adventure") == ["action", "adventure"]
     assert map_audiobook_keywords("Science Fiction & Fantasy") == ["science fiction", "fantasy"]
 
+    # Colon-joined tag genres split like the other separators
+    assert map_audiobook_keywords("Teen & Young Adult:Science Fiction & Fantasy") == ["teen", "young adult", "science fiction", "fantasy"]
+
     # MediaInfo's placeholder for a malformed genre atom is not a keyword
     assert map_audiobook_keywords("Unknown kind of value!") == []
     assert map_audiobook_keywords(["Unknown kind of value!", "Fantasy"]) == ["fantasy"]

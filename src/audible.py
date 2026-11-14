@@ -110,6 +110,31 @@ def _authors(value: Any) -> list[dict[str, str]]:
     return authors
 
 
+# Audible files topics such as "Bullying & Abuse" under these, which describe the
+# subject matter, not the genre, so only the ladder's broad genre is kept.
+_TOPIC_BRANCHES = frozenset({"difficult situations", "social & family issues", "social issues", "health & wellness", "growing up & facts of life"})
+
+
+def _genres(value: Any) -> list[str]:
+    """Flatten Audible's category ladders: the audience root, then each ladder's broad genre and its leaf."""
+    if not isinstance(value, list):
+        return []
+    names: list[str] = []
+    for ladder_entry in value:
+        if not isinstance(ladder_entry, dict) or str(ladder_entry.get("root", "Genres")) != "Genres":
+            continue
+        ladder = [name for item in ladder_entry.get("ladder") or [] if isinstance(item, dict) and (name := _clean_text(item.get("name")))]
+        if not ladder:
+            continue
+        picks = [ladder[0]]
+        if len(ladder) > 1:
+            picks.append(ladder[1])
+        if not any(step.lower() in _TOPIC_BRANCHES for step in ladder[1:-1]):
+            picks.append(ladder[-1])
+        names.extend(name for name in picks if name not in names)
+    return names[:10]
+
+
 def _parse_product(product: Any, asin: str) -> dict[str, Any] | None:
     if not _is_str_dict(product) or str(product.get("asin", "")).upper() != asin or not _clean_text(product.get("title")):
         return None
@@ -122,6 +147,7 @@ def _parse_product(product: Any, asin: str) -> dict[str, Any] | None:
         "overview": _clean_text(product.get("publisher_summary") or product.get("merchandising_description") or product.get("merchandising_summary")),
         "isbn": _clean_text(product.get("isbn")),
         "language": _clean_text(product.get("language")),
+        "genres": _genres(product.get("category_ladders")),
     }
     date = product.get("release_date") or product.get("publication_datetime")
     if isinstance(date, str) and re.match(r"^\d{4}", date):
@@ -152,7 +178,7 @@ def _parse_product(product: Any, asin: str) -> dict[str, Any] | None:
         if isinstance(count, int) and count > 0 and isinstance(average, (int, float)) and 0 < average <= 5:
             result["rating_count"] = count
             result["rating_average"] = round(float(average), 1)
-    return {key: value for key, value in result.items() if value not in (None, "")}
+    return {key: value for key, value in result.items() if value not in (None, "", [])}
 
 
 def _parse_page(markup: str, asin: str) -> dict[str, Any] | None:
@@ -201,12 +227,12 @@ async def fetch_audible_metadata(asin: str, domain: str, base_dir: str) -> dict[
     except ValueError:
         return None
     cache = cache_for(base_dir)
-    cache_key = f"v2:{domain}:{asin}"
+    cache_key = f"v3:{domain}:{asin}"
     cached = await cache.get("audible", "product", cache_key)
     if not is_cache_miss(cached) and _is_str_dict(cached):
         return None if cached.get("not_found") else cached
     params = {
-        "response_groups": "contributors,media,product_attrs,product_desc,product_details,product_extended_attrs,rating,series",
+        "response_groups": "category_ladders,contributors,media,product_attrs,product_desc,product_details,product_extended_attrs,rating,series",
         "image_sizes": "1215,900,500",
     }
     async with httpx.AsyncClient(timeout=10.0, follow_redirects=True) as client:

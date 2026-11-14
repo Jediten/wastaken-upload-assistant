@@ -36,6 +36,19 @@ def _catalog_product():
     }
 
 
+def test_catalog_flattens_category_ladders_into_genres():
+    product = _catalog_product()
+    product["category_ladders"] = [
+        {"root": "Genres", "ladder": [{"name": "Teen & Young Adult"}, {"name": "Literature & Fiction"}, {"name": "Action & Adventure"}]},
+        {"root": "Genres", "ladder": [{"name": "Teen & Young Adult"}, {"name": "Science Fiction & Fantasy"}, {"name": "Science Fiction"}, {"name": "Dystopian"}]},
+        {"root": "Genres", "ladder": [{"name": "Teen & Young Adult"}, {"name": "Literature & Fiction"}, {"name": "Difficult Situations"}, {"name": "Bullying & Abuse"}]},
+        {"root": "Other", "ladder": [{"name": "Ignored"}]},
+    ]
+    result = audible._parse_product(product, ASIN)
+    assert result["genres"] == ["Teen & Young Adult", "Literature & Fiction", "Action & Adventure", "Science Fiction & Fantasy", "Dystopian"]
+    assert "genres" not in audible._parse_product(_catalog_product(), ASIN)
+
+
 def test_catalog_parses_numeric_series_sequence_and_single_contributors():
     product = _catalog_product()
     product["series"] = [{"title": "Imaginary Cycle", "sequence": 2.0}]

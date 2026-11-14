@@ -558,7 +558,7 @@ def map_audiobook_keywords(genres: str | list[str]) -> list[str]:
                     results.append(m)
             continue
 
-        for part in re.split(r"[;,/|]", item):
+        for part in re.split(r"[;,/|:]", item):
             p_clean = re.sub(r"^\d+\.\s*", "", part).strip().lower()
             if not p_clean or p_clean in _JUNK_GENRE_VALUES:
                 continue

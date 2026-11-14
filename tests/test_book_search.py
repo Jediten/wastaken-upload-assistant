@@ -265,11 +265,20 @@ async def test_gather_book_prep_fills_metadata_from_the_chosen_audible_match(tmp
             "runtime_minutes": 671,
             "book_series": "Imaginary Cycle",
             "book_series_index": "1",
+            "genres": ["Teen & Young Adult", "Science Fiction & Fantasy", "Dystopian"],
         }
     )
     monkeypatch.setattr(book_prep, "fetch_audible_metadata", fetched)
-    meta = Meta(audiobook=True, title="HG1 - The Invented Debt", author="Mira Example", basename_no_ext="Mira Example - The Invented Debt", mediainfo={}, edit=False)
-    monkeypatch.setattr(book_prep, "export_info", AsyncMock(return_value={}))
+    meta = Meta(
+        audiobook=True,
+        title="HG1 - The Invented Debt",
+        author="Mira Example",
+        basename_no_ext="Mira Example - The Invented Debt",
+        mediainfo={},
+        edit=False,
+    )
+    # The file's own genre tag is the generic "Audiobook"; Audible's genres replace it.
+    monkeypatch.setattr(book_prep, "export_info", AsyncMock(return_value={"media": {"track": [{"@type": "General", "Genre": "Audiobook"}]}}))
 
     await book_prep.gather_book_prep(meta, str(tmp_path / "book.m4b"), str(tmp_path), {"DEFAULT": {"google_books_api_key": "test"}})
 
@@ -280,6 +289,8 @@ async def test_gather_book_prep_fills_metadata_from_the_chosen_audible_match(tmp
     assert (meta.book_language, meta.year) == ("English", 2008)
     assert meta.book_series == "Imaginary Cycle"
     assert meta.audiobook_duration_formatted == "11h 11m 00s"
+    assert meta.genres == ["Teen & Young Adult", "Science Fiction & Fantasy", "Dystopian"]
+    assert meta.keywords == ["teen", "young adult", "science fiction", "fantasy", "dystopian"]
 
 
 @pytest.mark.asyncio

@@ -106,7 +106,7 @@ async def search_audible_catalog(title: str, author: str, domain: str, base_dir:
     except ValueError:
         return []
     cache = cache_for(base_dir)
-    cache_key = f"v1:{domain}:{normalize_text(title)}:{normalize_text(author)}:{limit}"
+    cache_key = f"v2:{domain}:{normalize_text(title)}:{normalize_text(author)}:{limit}"
     cached = await cache.get("audible", "search", cache_key)
     if not is_cache_miss(cached) and isinstance(cached, list):
         return cached
@@ -114,7 +114,7 @@ async def search_audible_catalog(title: str, author: str, domain: str, base_dir:
         "title": title,
         "num_results": limit,
         "products_sort_by": "Relevance",
-        "response_groups": "contributors,media,product_attrs,product_desc,product_details,product_extended_attrs,rating,series",
+        "response_groups": "category_ladders,contributors,media,product_attrs,product_desc,product_details,product_extended_attrs,rating,series",
         "image_sizes": "1215,900,500",
     }
     if author:
