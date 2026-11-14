@@ -163,14 +163,17 @@ def test_page_structured_data_accepts_single_author_and_narrator():
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     "audiobook,asin,domain,expected",
-    [(True, ASIN, "audible.com.br", True), (True, "", "audible.com.br", False), (True, ASIN, "", False), (False, ASIN, "audible.com.br", False)],
+    [(True, ASIN, "audible.com.br", True), (True, "", "audible.com.br", False), (True, ASIN, "", True), (False, ASIN, "audible.com.br", False)],
 )
-async def test_lookup_requires_audiobook_asin_and_marketplace(tmp_path, monkeypatch, audiobook, asin, domain, expected):
+async def test_lookup_requires_audiobook_and_asin_and_defaults_the_marketplace(tmp_path, monkeypatch, audiobook, asin, domain, expected):
     fetch = AsyncMock(return_value={"title": "A Fictional Promise"})
     monkeypatch.setattr(book_prep, "fetch_audible_metadata", fetch)
     meta = Meta(audiobook=audiobook, asin=asin, edit=True, filelist=[])
     await book_prep.gather_book_prep(meta, "fictional.m4b", str(tmp_path), {"DEFAULT": {"audible_domain": domain}})
     assert fetch.await_count == int(expected)
+    if expected:
+        assert fetch.await_args.args[1] == (domain or "audible.com")
+        assert meta.audible_url == f"https://www.{domain or 'audible.com'}/pd/{ASIN}"
 
 
 @pytest.mark.asyncio
@@ -239,7 +242,7 @@ async def test_asin_supplied_only_by_mam_does_not_trigger_audible(tmp_path, monk
     [
         ("audible.com.br", "", f"https://www.audible.com.br/pd/{ASIN}"),
         ("audible.com.br", f"https://audible.co.uk/pd/Fictional-Title/{ASIN}", f"https://www.audible.co.uk/pd/{ASIN}"),
-        ("", "", ""),
+        ("", "", f"https://www.audible.com/pd/{ASIN}"),
         ("example.com", "", ""),
     ],
 )
@@ -274,7 +277,8 @@ async def test_prep_reconciles_audible_url_after_mam_changes_asin(tmp_path, monk
     await book_prep.gather_book_prep(meta, "fictional.m4b", str(tmp_path), {"DEFAULT": {"audible_domain": domain, "mam_api_key": "test"}})
 
     assert meta.asin == final_asin
-    assert meta.audible_url == (f"https://www.audible.com.br/pd/{final_asin}" if domain == "audible.com.br" else "")
+    expected_domain = {"audible.com.br": "audible.com.br", "": "audible.com"}.get(domain, "")
+    assert meta.audible_url == (f"https://www.{expected_domain}/pd/{final_asin}" if expected_domain else "")
     if explicit_url == f"https://www.audible.co.uk/pd/{ASIN}":
         fetch.assert_awaited_once_with(ASIN, "audible.co.uk", str(tmp_path))
     else:

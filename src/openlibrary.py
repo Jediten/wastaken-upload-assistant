@@ -9,6 +9,14 @@ from src.metadata_cache import MetadataCache, cache_for, is_cache_miss
 
 openlibrary_color_str = "[#e1d8c1]OpenLibrary[/#e1d8c1]"
 
+# Library bookkeeping that OpenLibrary files under subjects, never a genre:
+# "nyt:series_books=2010-08-21", "collectionID:...", "Accessible book".
+_CATALOG_TAG_RE = re.compile(r"^[a-z_]+:\S|=|^accessible book$|^protected daisy$|^in library$|^large type books$|^open library staff picks$", re.IGNORECASE)
+
+
+def _is_catalog_tag(subject: str) -> bool:
+    return bool(_CATALOG_TAG_RE.search(subject.strip()))
+
 
 def _is_str_dict(val: object) -> TypeIs[dict[str, Any]]:
     return isinstance(val, dict)
@@ -94,7 +102,7 @@ class OpenLibraryManager:
 
                         subjects = data.get("subjects")
                         if subjects and _is_obj_list(subjects):
-                            subject_list = [str(subject) for subject in subjects[:10] if subject]
+                            subject_list = [str(subject) for subject in subjects if subject and not _is_catalog_tag(str(subject))][:10]
                             metadata["keywords"] = list(subject_list)
                             metadata["genres"] = list(subject_list)
 
@@ -150,6 +158,7 @@ class OpenLibraryManager:
                                 if publishers and _is_obj_list(publishers) and not metadata.get("publisher"):
                                     metadata["publisher"] = ", ".join(publishers)
                                 self._add_year(metadata, details.get("publish_date"))
+                                self._add_edition_details(metadata, details)
                                 metadata["isbn"] = clean_isbn
                                 await cache.set("openlibrary", "isbn", clean_isbn, metadata)
                                 return metadata
@@ -181,6 +190,30 @@ class OpenLibraryManager:
                 metadata["year"] = year
                 metadata["search_year"] = int(year)
 
+    @staticmethod
+    def _add_edition_details(metadata: dict[str, Any], details: dict[str, Any]) -> None:
+        """Add the edition's language and, for recordings, its narrator."""
+        if not metadata.get("book_language"):
+            from src.book_prep import is_valid_book_language, resolve_book_language
+
+            for item in details.get("languages") or []:
+                code = (item.get("key", "") if isinstance(item, dict) else str(item)).rsplit("/", 1)[-1].strip()
+                if not code:
+                    continue
+                full, iso3 = resolve_book_language(code)
+                if is_valid_book_language(full, iso3):
+                    metadata["book_language"] = full
+                    metadata["book_language_iso"] = iso3
+                break
+        if not metadata.get("narrator"):
+            narrators = [
+                str(item.get("name")).strip()
+                for item in (details.get("contributors") or [])
+                if isinstance(item, dict) and item.get("name") and "narrat" in str(item.get("role", "")).lower()
+            ]
+            if narrators:
+                metadata["narrator"] = ", ".join(dict.fromkeys(narrators))
+
     def _metadata_from_book_details(self, book_data: dict[str, Any], details: dict[str, Any], isbn: str) -> dict[str, Any]:
         title = details.get("title")
         if not title:
@@ -195,6 +228,7 @@ class OpenLibraryManager:
         if publishers and _is_obj_list(publishers):
             metadata["publisher"] = ", ".join(publishers)
         self._add_year(metadata, details.get("publish_date"))
+        self._add_edition_details(metadata, details)
         thumbnail_url = book_data.get("thumbnail_url")
         if thumbnail_url:
             metadata["artwork_url"] = thumbnail_url.replace("-S.jpg", "-L.jpg")

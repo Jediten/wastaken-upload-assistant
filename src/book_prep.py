@@ -21,7 +21,7 @@ from urllib.parse import urlparse, urlsplit
 import langcodes
 
 from src import language_names
-from src.audible import fetch_audible_metadata, normalize_audible_domain, normalize_audible_url, resolve_audible_url
+from src.audible import build_audible_url, fetch_audible_metadata, normalize_audible_domain, normalize_audible_url, resolve_audible_url
 from src.book_extractors import (
     extract_audiobook_series_from_title as _extract_audiobook_series_from_title,
 )
@@ -47,6 +47,7 @@ from src.book_extractors import normalize_book_title_separators
 from src.book_extractors import (
     normalize_series_index as _normalize_series_index,
 )
+from src.book_search import DEFAULT_AUDIBLE_DOMAIN, find_book_identifier
 from src.console import logger
 from src.exportmi import export_info
 from src.genre_map import map_audiobook_keywords
@@ -303,6 +304,21 @@ def _extract_document_file_metadata(videopath: str, meta: Meta) -> None:
             logger.debug(f"[cyan]PDF ISBN extracted: {pdf_isbn}[/cyan]")
 
 
+_BRACKETED_ASIN_RE = re.compile(r"\[(B0[A-Z0-9]{8}|\d{10})\]", re.IGNORECASE)
+_READ_BY_RE = re.compile(r"(?:narrated|read|performed)\s+by[:\s]+([^.;|\n\(\)\[\]]+)", re.IGNORECASE)
+
+
+def _narrator_from_tags(*, author: str, album_performer: str | None, texts: tuple[str | None, ...]) -> str:
+    """Guess the narrator from an Album Artist that is not the author, or a "Read by" note."""
+    for text in texts:
+        if text and (match := _READ_BY_RE.search(text)):
+            reader = match.group(1).strip(" ,-")
+            return str(author or "").strip() if reader.casefold() in ("the author", "author", "the authors") else reader
+    if album_performer and album_performer.strip() and album_performer.strip().casefold() != str(author or "").strip().casefold():
+        return album_performer.strip()
+    return ""
+
+
 def _extract_mediainfo_tags(
     general_track: dict[str, Any],
     tracks: list[dict[str, Any]],
@@ -354,6 +370,13 @@ def _extract_mediainfo_tags(
     composer = _unescape_meta_val(general_track.get("Composer") or general_track.get("composer"))
     if composer and not meta.narrator:
         meta.narrator = composer
+    if not meta.narrator and (nrt := _mi_extra(general_track, "nrt")):
+        meta.narrator = nrt  # Audible's own narrator atom
+    if not meta.narrator:
+        # Rips commonly put the reader in Album Artist, or say "Read by" in a comment.
+        comment_tag = _unescape_meta_val(general_track.get("Comment") or general_track.get("comment"))
+        description_tag = _unescape_meta_val(general_track.get("Description") or general_track.get("description"))
+        meta.narrator = _narrator_from_tags(author=meta.author, album_performer=album_performer, texts=(comment_tag, description_tag, title_tag))
 
     # 4. Publisher
     publisher = _unescape_meta_val(general_track.get("Publisher") or general_track.get("publisher"))
@@ -372,7 +395,7 @@ def _extract_mediainfo_tags(
     asin_val = general_track.get("ASIN") or general_track.get("asin")
     if not asin_val and isinstance(general_track.get("extra"), dict):
         asin_val = general_track["extra"].get("ASIN") or general_track["extra"].get("asin")
-    asin_val = _unescape_meta_val(asin_val)
+    asin_val = _unescape_meta_val(asin_val) or _mi_extra(general_track, "AUDIBLE_ASIN")
     if asin_val and not meta.asin:
         meta.asin = asin_val
 
@@ -432,7 +455,7 @@ def _extract_mediainfo_tags(
 
     # 9. Language
     if not meta.book_language:
-        lang_val = _unescape_meta_val(general_track.get("Language") or general_track.get("language"))
+        lang_val = _unescape_meta_val(general_track.get("Language") or general_track.get("language")) or _mi_extra(general_track, "LANGUAGE")
         if lang_val:
             full, iso3 = resolve_book_language(lang_val)
             if is_valid_book_language(full, iso3):
@@ -556,6 +579,13 @@ async def gather_book_prep(
             meta.year = selected_year
             meta.search_year = selected_year
 
+    # Audible-sourced rips often carry the ASIN in brackets in the file or folder name.
+    if not meta.asin:
+        for name in (Path(videopath).name, meta.basename_no_ext or ""):
+            if match := _BRACKETED_ASIN_RE.search(name):
+                meta.asin = match.group(1).upper()
+                break
+
     # Series fallback from filename (embedded Calibre/MediaInfo tags take precedence)
     if not meta.book_series:
         fname_series, fname_index = _extract_series_from_filename(Path(videopath).name)
@@ -653,6 +683,27 @@ async def gather_book_prep(
                                 meta.search_year = int(val)
         except Exception as ex:
             logger.debug(f"[yellow]Warning: MyAnonamouse API lookup failed: {ex}[/yellow]")
+
+    audiobook_total_duration = 0.0
+    audiobook_duration_formatted = ""
+    if meta.audiobook:
+        audiobook_total_duration, audiobook_duration_formatted = await get_audiobook_duration(meta.filelist)
+
+    # Nothing to look up by: search the catalogs by title and author instead.
+    if not (meta.isbn or audible_asin or meta.openlibrary or mam_data or meta.edit):
+        try:
+            chosen = await find_book_identifier(meta, base_dir, config, duration_seconds=audiobook_total_duration or None)
+        except Exception as ex:
+            logger.info(f"[yellow]Warning: catalog search failed: {ex}[/yellow]")
+            chosen = None
+        if chosen and chosen.get("source") == "audible" and chosen.get("asin"):
+            audible_asin = str(chosen["asin"]).upper()
+            meta.asin = audible_asin
+            if not meta.audible_url and chosen.get("domain") and chosen["domain"] != DEFAULT_AUDIBLE_DOMAIN:
+                with contextlib.suppress(ValueError):
+                    meta.audible_url = build_audible_url(audible_asin, str(chosen["domain"]))
+        elif chosen and chosen.get("isbn"):
+            meta.isbn = str(chosen["isbn"])
 
     # Google Books API search using ISBN (online lookup takes precedence)
     google_books_data = None
@@ -759,7 +810,7 @@ async def gather_book_prep(
             audible_domain = (
                 (urlsplit(normalize_audible_url(meta.audible_url)).hostname or "").removeprefix("www.")
                 if meta.audible_url
-                else normalize_audible_domain((config or {}).get("DEFAULT", {}).get("audible_domain", ""))
+                else normalize_audible_domain((config or {}).get("DEFAULT", {}).get("audible_domain", "") or DEFAULT_AUDIBLE_DOMAIN)
             )
         except ValueError:
             audible_domain = ""
@@ -804,12 +855,12 @@ async def gather_book_prep(
             meta.audible_url = resolve_audible_url(
                 meta.asin,
                 explicit_url=meta.audible_url,
-                domain=(config or {}).get("DEFAULT", {}).get("audible_domain", ""),
+                domain=(config or {}).get("DEFAULT", {}).get("audible_domain", "") or DEFAULT_AUDIBLE_DOMAIN,
             )
 
     if meta.audiobook:
         filelist = meta.filelist
-        total_duration, duration_formatted = await get_audiobook_duration(filelist)
+        total_duration, duration_formatted = audiobook_total_duration, audiobook_duration_formatted
         meta.audiobook_duration = total_duration
         meta.audiobook_duration_formatted = duration_formatted
 

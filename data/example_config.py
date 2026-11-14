@@ -400,11 +400,10 @@ config: dict[str, Any] = {
         # Preferred logo language (ISO 639-1). Defaults to English ("en").
         # Falls back to English when a logo in the preferred language is unavailable.
         "logo_language": "",
-        # Audible marketplace used to link ASINs in descriptions. Leave empty
-        # unless you set your marketplace explicitly.
+        # Audible marketplace used to look up ASINs and link them in descriptions.
+        # Leave empty to use audible.com.
         # Examples: audible.com, audible.co.uk, audible.com.br.
-        # --audible-url overrides this value for an individual upload. Audiobook
-        # catalog lookup requires this domain (or --audible-url) and an ASIN.
+        # --audible-url overrides this value for an individual upload.
         "audible_domain": "",
         # Screenshot thumbnail width where supported. Default: 350 (for example, [img=350]).
         "thumbnail_size": "350",
