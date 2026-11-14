@@ -1424,6 +1424,8 @@ class Args:
                             meta.answers[answer_key] = answer
                     elif key == "manual_cast":
                         meta.manual_cast = [name.strip() for name in value2.split(",") if name.strip()]
+                    elif key == "keywords":
+                        meta.keywords = [keyword.strip() for keyword in value2.split(",") if keyword.strip()]
                     elif key == "usenet_episodes_only":
                         meta.usenet_episodes_only = [tracker.strip().upper() for tracker in value2.split(",") if tracker.strip()]
                     elif key == "openlibrary":

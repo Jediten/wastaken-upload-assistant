@@ -17,6 +17,12 @@ def test_book_cli_narrator_and_genres_override_metadata(tmp_path):
     assert meta.genres == ["Fantasy", "Science Fiction"]
 
 
+def test_book_cli_keywords_are_split_into_a_list(tmp_path):
+    meta, _, _ = Args({"DEFAULT": {"screens": 1}}).parse([str(tmp_path), "--keywords", "young adult, dystopian, science fiction"], Meta(category="BOOK"))
+
+    assert meta.keywords == ["young adult", "dystopian", "science fiction"]
+
+
 def test_game_cli_uses_publisher_and_new_overrides(tmp_path):
     meta, _, _ = Args({"DEFAULT": {"screens": 1}}).parse(
         [

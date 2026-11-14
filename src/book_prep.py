@@ -417,7 +417,7 @@ def _extract_mediainfo_tags(
 
     # 8. Genre -> Keywords
     genre = _unescape_meta_val(general_track.get("Genre") or general_track.get("genre"))
-    if genre:
+    if genre and not cli_overrides["keywords"]:
         cleaned_words = map_audiobook_keywords(genre)
         if cleaned_words:
             existing_keywords = meta.keywords

@@ -529,6 +529,10 @@ AUDIBLE_ENG_GENRE_MAP: dict[str, list[str]] = {
 }
 
 
+# Strings MediaInfo emits for malformed or empty genre atoms; never real genres.
+_JUNK_GENRE_VALUES = frozenset({"unknown kind of value!", "unknown", "none", "n/a"})
+
+
 def map_audiobook_keywords(genres: str | list[str]) -> list[str]:
     """Map audiobook genre(s) using AUDIBLE_PTBR_GENRE_MAP and AUDIBLE_ENG_GENRE_MAP,
 
@@ -538,7 +542,7 @@ def map_audiobook_keywords(genres: str | list[str]) -> list[str]:
 
     def _lookup(val: str) -> list[str] | None:
         clean = re.sub(r"^\d+\.\s*", "", val).strip().lower()
-        if not clean:
+        if not clean or clean in _JUNK_GENRE_VALUES:
             return []
         return AUDIBLE_PTBR_GENRE_MAP.get(clean) or AUDIBLE_ENG_GENRE_MAP.get(clean)
 
@@ -556,7 +560,7 @@ def map_audiobook_keywords(genres: str | list[str]) -> list[str]:
 
         for part in re.split(r"[;,/|]", item):
             p_clean = re.sub(r"^\d+\.\s*", "", part).strip().lower()
-            if not p_clean:
+            if not p_clean or p_clean in _JUNK_GENRE_VALUES:
                 continue
             for m in _lookup(p_clean) or [p_clean]:
                 if m not in results:

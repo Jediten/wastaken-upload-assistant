@@ -90,6 +90,10 @@ def test_map_audiobook_keywords():
     assert map_audiobook_keywords("Action & Adventure") == ["action", "adventure"]
     assert map_audiobook_keywords("Science Fiction & Fantasy") == ["science fiction", "fantasy"]
 
+    # MediaInfo's placeholder for a malformed genre atom is not a keyword
+    assert map_audiobook_keywords("Unknown kind of value!") == []
+    assert map_audiobook_keywords(["Unknown kind of value!", "Fantasy"]) == ["fantasy"]
+
     # Multiple genres in list
     assert map_audiobook_keywords(["Ação e Aventura", "Romance"]) == ["ação", "aventura", "romance"]
 
