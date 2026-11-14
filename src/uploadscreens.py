@@ -43,6 +43,13 @@ def _is_str_set(val: object) -> TypeIs[set[str]]:
 _upload_progress_ids = itertools.count(1)
 
 
+def _chevereto_display_url(image_data: dict[str, Any]) -> str:
+    """Prefer the medium rendition, which Chevereto only makes for images wider than its medium size (500 px by default)."""
+    medium = image_data.get("medium")
+    medium_url = medium.get("url") if isinstance(medium, dict) else None
+    return str(medium_url or image_data.get("url") or "")
+
+
 def _build_image_start_limiter(delay: float) -> Callable[[], Awaitable[None]]:
     """Create an async wait function that spaces image-upload starts."""
     start_lock = asyncio.Lock()
@@ -361,7 +368,7 @@ async def upload_image_task(args: Sequence[Any]) -> dict[str, Any]:
                         logger.info(f"[yellow]ptscreens upload failed: {response_data.get('error', {}).get('message', 'Unknown error')} {(response.status_code)}")
                         return {"status": "failed", "reason": f"ptscreens upload failed: {response_data.get('error', {}).get('message', 'Unknown error')}"}
 
-                    img_url = response_data["image"]["medium"]["url"]
+                    img_url = _chevereto_display_url(response_data["image"])
                     raw_url = response_data["image"]["url"]
                     web_url = response_data["image"]["url_viewer"]
 
@@ -396,7 +403,7 @@ async def upload_image_task(args: Sequence[Any]) -> dict[str, Any]:
                         logger.info("[yellow]utppm failed, trying next image host")
                         return {"status": "failed", "reason": "utppm upload failed"}
 
-                    img_url = response_data["image"]["medium"]["url"]
+                    img_url = _chevereto_display_url(response_data["image"])
                     raw_url = response_data["image"]["url"]
                     web_url = response_data["image"]["url_viewer"]
 
@@ -431,7 +438,7 @@ async def upload_image_task(args: Sequence[Any]) -> dict[str, Any]:
                         logger.info("[yellow]OnlyImage failed, trying next image host")
                         return {"status": "failed", "reason": "OnlyImage upload failed"}
 
-                    img_url = response_data["data"]["medium"]["url"]
+                    img_url = _chevereto_display_url(response_data["data"])
                     raw_url = response_data["data"]["image"]["url"]
                     web_url = response_data["data"]["url_viewer"]
 
