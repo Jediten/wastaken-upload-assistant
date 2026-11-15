@@ -419,9 +419,11 @@ def _extract_mediainfo_tags(
             if parsed_index and (localized_history_series or not meta.book_series_index):
                 meta.book_series_index = parsed_index
 
-    # 6. Overview/Comment
+    # 6. Overview/Comment (a tag holding only punctuation, such as "-", is no synopsis)
     comment = _unescape_meta_val(general_track.get("Comment") or general_track.get("comment"))
     description = _unescape_meta_val(general_track.get("Description") or general_track.get("description"))
+    comment = comment if comment and re.search(r"\w{2}", comment) else None
+    description = description if description and re.search(r"\w{2}", description) else None
     if not meta.overview:
         if comment:
             meta.overview = comment

@@ -58,6 +58,10 @@ def test_title_query_variants_retry_without_the_subtitle():
     ]
     assert title_query_variants("The 100") == ["The 100"]
     assert title_query_variants("") == []
+    # A trailing bracket that is not a book number is tried without, after the full title
+    assert title_query_variants("Homecoming (The Hundred 3)") == ["Homecoming (The Hundred 3)", "Homecoming"]
+    assert title_query_variants("Hamlet [Arkangel Shakespeare] (Unabridged)") == ["Hamlet [Arkangel Shakespeare] (Unabridged)", "Hamlet"]
+    assert title_query_variants("(500) Days") == ["(500) Days"]
 
 
 def test_split_release_name_takes_author_and_last_segment():
@@ -336,6 +340,14 @@ async def test_narrator_falls_back_to_album_artist_or_read_by_note(tmp_path, mon
     )
     await book_prep.gather_book_prep(same_person, "book.m4b", str(tmp_path), {"DEFAULT": {"google_books_api_key": "test"}})
     assert same_person.narrator == "Mira Example"
+
+    junk_overview = Meta(
+        audiobook=True,
+        edit=True,
+        mediainfo={"media": {"track": [{"@type": "General", "Title": "Memoir", "Performer": "Mira Example", "Comment": "-", "Description": "A real synopsis."}]}},
+    )
+    await book_prep.gather_book_prep(junk_overview, "book.m4b", str(tmp_path), {"DEFAULT": {"google_books_api_key": "test"}})
+    assert junk_overview.overview == "A real synopsis."
 
     by_the_author = Meta(
         audiobook=True, edit=True, mediainfo={"media": {"track": [{"@type": "General", "Title": "Memoir", "Performer": "Mira Example", "Comment": "Read by the author."}]}}

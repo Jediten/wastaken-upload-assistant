@@ -29,6 +29,7 @@ _AUDIO_FORMAT_RE = re.compile(r"audio|\bcd\b|mp3|cassette|playaway", re.IGNORECA
 _SERIES_PREFIX_RE = re.compile(r"^[A-Z]{1,4}\d{1,2}\s*[-:]\s*", re.IGNORECASE)
 _TRAILING_SERIES_RE = re.compile(r"\s*[\(\[][^\)\]]*(?:book|vol(?:ume)?|#)\s*\d+[^\)\]]*[\)\]]\s*$", re.IGNORECASE)
 _SUBTITLE_SPLIT_RE = re.compile(r"\s*[:\u2013\u2014]\s+|\s+-\s+")
+_TRAILING_BRACKET_RE = re.compile(r"\s*[\(\[][^\)\]]*[\)\]]\s*$")
 
 # A running time this close to the catalog's is the same recording.
 RUNTIME_TOLERANCE = 0.03
@@ -51,15 +52,25 @@ def clean_search_title(title: str) -> str:
     return value.strip(" -:") or str(title or "").strip()
 
 
+def strip_trailing_brackets(title: str) -> str:
+    """Drop every trailing bracketed group, such as "(The Hundred 3)" or "[Unabridged]", keeping the text before them."""
+    value = str(title or "").strip()
+    while (match := _TRAILING_BRACKET_RE.search(value)) and match.start() > 0:
+        value = value[: match.start()].rstrip(" -:")
+    return value
+
+
 def title_query_variants(title: str) -> list[str]:
-    """The cleaned title first, then the same without its subtitle, each once."""
+    """The cleaned title first, then fallbacks without its subtitle and without trailing brackets, each once."""
     cleaned = clean_search_title(title)
     if not cleaned:
         return []
-    variants = [cleaned]
-    head = _SUBTITLE_SPLIT_RE.split(cleaned, maxsplit=1)[0].strip(" -:")
-    if head and normalize_text(head) != normalize_text(cleaned):
-        variants.append(head)
+    candidates = [cleaned, _SUBTITLE_SPLIT_RE.split(cleaned, maxsplit=1)[0].strip(" -:"), strip_trailing_brackets(cleaned)]
+    candidates.append(strip_trailing_brackets(candidates[1]))
+    variants: list[str] = []
+    for candidate in candidates:
+        if candidate and normalize_text(candidate) not in {normalize_text(v) for v in variants}:
+            variants.append(candidate)
     return variants
 
 
