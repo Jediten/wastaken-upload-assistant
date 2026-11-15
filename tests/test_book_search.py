@@ -399,6 +399,60 @@ def test_openlibrary_catalog_tags_are_not_subjects():
 
 
 @pytest.mark.asyncio
+async def test_asin_from_another_marketplace_falls_back_to_the_title_search(tmp_path, monkeypatch):
+    """A .com.au ASIN in the tags is unknown to audible.com; the search finds the .com listing of the same recording."""
+    local_asin = "B0LOCAL123"
+
+    async def fetch(asin, _domain, _base_dir):
+        if asin == local_asin:
+            return {"title": "Sunrise on the Reaping", "narrator": "Jefferson White", "genres": ["Teen & Young Adult", "Dystopian"], "runtime_minutes": 768}
+        return None
+
+    fetched = AsyncMock(side_effect=fetch)
+    monkeypatch.setattr(book_prep, "fetch_audible_metadata", fetched)
+    search = AsyncMock(return_value={"source": "audible", "asin": local_asin, "title": "Sunrise on the Reaping", "domain": "audible.com"})
+    monkeypatch.setattr(book_prep, "find_book_identifier", search)
+    monkeypatch.setattr(
+        book_prep,
+        "export_info",
+        AsyncMock(
+            return_value={
+                "media": {"track": [{"@type": "General", "Title": "Sunrise on the Reaping", "Performer": "Suzanne Collins", "extra": {"AUDIBLE_ASIN": "B0D6PCZ98M"}}]}
+            }
+        ),
+    )
+    monkeypatch.setattr(book_prep, "get_audiobook_duration", AsyncMock(return_value=(768 * 60.0, "12h 48m 00s")))
+    monkeypatch.setattr(book_prep, "get_audiobook_bitrate", AsyncMock(return_value=None))
+    meta = Meta(audiobook=True, edit=False, mediainfo={}, basename_no_ext="Sunrise on the Reaping [B0D6PCZ98M]")
+
+    await book_prep.gather_book_prep(meta, str(tmp_path / "book.m4b"), str(tmp_path), {"DEFAULT": {}})
+
+    assert [call.args[0] for call in fetched.await_args_list] == ["B0D6PCZ98M", local_asin]
+    assert search.await_count == 1
+    assert meta.asin == local_asin
+    assert meta.audible_url == f"https://www.audible.com/pd/{local_asin}"
+    assert meta.genres == ["Teen & Young Adult", "Dystopian"]
+
+
+@pytest.mark.asyncio
+async def test_known_asin_is_fetched_once_and_skips_the_search(tmp_path, monkeypatch):
+    fetched = AsyncMock(return_value={"title": "Known Book"})
+    monkeypatch.setattr(book_prep, "fetch_audible_metadata", fetched)
+    search = AsyncMock(return_value=None)
+    monkeypatch.setattr(book_prep, "find_book_identifier", search)
+    monkeypatch.setattr(book_prep, "export_info", AsyncMock(return_value={}))
+    monkeypatch.setattr(book_prep, "get_audiobook_duration", AsyncMock(return_value=(0.0, "")))
+    monkeypatch.setattr(book_prep, "get_audiobook_bitrate", AsyncMock(return_value=None))
+    meta = Meta(audiobook=True, edit=False, mediainfo={}, asin=ASIN)
+
+    await book_prep.gather_book_prep(meta, str(tmp_path / "book.m4b"), str(tmp_path), {"DEFAULT": {}})
+
+    assert fetched.await_count == 1
+    assert search.await_count == 0
+    assert meta.title == "Known Book"
+
+
+@pytest.mark.asyncio
 async def test_openlibrary_isbn_lookup_adds_edition_language_and_narrator(tmp_path, monkeypatch):
     from src import openlibrary
     from src.openlibrary import OpenLibraryManager

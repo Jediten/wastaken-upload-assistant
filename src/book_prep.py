@@ -488,6 +488,16 @@ def _extract_mediainfo_tags(
     return recorded_year
 
 
+def _audible_marketplace(meta: Meta, config: dict[str, Any] | None) -> str:
+    """The marketplace an ASIN is looked up on: the explicit URL's, else the configured one, else audible.com."""
+    try:
+        if meta.audible_url:
+            return (urlsplit(normalize_audible_url(meta.audible_url)).hostname or "").removeprefix("www.")
+        return normalize_audible_domain((config or {}).get("DEFAULT", {}).get("audible_domain", "") or DEFAULT_AUDIBLE_DOMAIN)
+    except ValueError:
+        return ""
+
+
 async def gather_book_prep(
     meta: Meta,
     videopath: str,
@@ -689,8 +699,21 @@ async def gather_book_prep(
     if meta.audiobook:
         audiobook_total_duration, audiobook_duration_formatted = await get_audiobook_duration(meta.filelist)
 
+    # An ASIN from the files may belong to another marketplace (a .com.au rip
+    # looked up on .com). Fetch it once here; if the marketplace does not know
+    # it, the title search below finds the same recording's local listing.
+    audible_fetches: dict[tuple[str, str], dict[str, Any] | None] = {}
+    asin_unresolved = False
+    if audible_asin and not meta.edit and not cli_overrides["asin"]:
+        marketplace = _audible_marketplace(meta, config)
+        if marketplace:
+            audible_fetches[(audible_asin, marketplace)] = await fetch_audible_metadata(audible_asin, marketplace, base_dir)
+            asin_unresolved = audible_fetches[(audible_asin, marketplace)] is None
+            if asin_unresolved:
+                logger.info(f"[yellow]Audible ASIN {audible_asin} is not listed on {marketplace}; searching the catalogs by title instead.[/yellow]")
+
     # Nothing to look up by: search the catalogs by title and author instead.
-    if not (meta.isbn or audible_asin or meta.openlibrary or mam_data or meta.edit):
+    if not (meta.isbn or meta.openlibrary or mam_data or meta.edit) and (not audible_asin or asin_unresolved):
         try:
             chosen = await find_book_identifier(meta, base_dir, config, duration_seconds=audiobook_total_duration or None)
         except Exception as ex:
@@ -806,16 +829,12 @@ async def gather_book_prep(
 
     audible_data: dict[str, Any] | None = None
     if audible_asin:
-        try:
-            audible_domain = (
-                (urlsplit(normalize_audible_url(meta.audible_url)).hostname or "").removeprefix("www.")
-                if meta.audible_url
-                else normalize_audible_domain((config or {}).get("DEFAULT", {}).get("audible_domain", "") or DEFAULT_AUDIBLE_DOMAIN)
-            )
-        except ValueError:
-            audible_domain = ""
+        audible_domain = _audible_marketplace(meta, config)
         if audible_domain:
-            audible_data = await fetch_audible_metadata(audible_asin, audible_domain, base_dir)
+            if (audible_asin, audible_domain) in audible_fetches:
+                audible_data = audible_fetches[(audible_asin, audible_domain)]
+            else:
+                audible_data = await fetch_audible_metadata(audible_asin, audible_domain, base_dir)
             if audible_data:
                 meta.asin = audible_asin
                 for key in ("title", "author", "narrator", "publisher", "overview", "isbn", "book_series", "book_series_index", "edition", "artwork_url"):
@@ -908,6 +927,9 @@ def normalize_audiobook_title(title: str, series: str, series_index: str = "") -
         )
         if repeated_volume:
             return title[: repeated_volume.start()].rstrip()
+    parenthesised = re.search(r"\s*[\(\[]\s*" + re.escape(series) + r"(?:\s*,?\s*(?:book|vol(?:ume)?|#)?\s*\d+(?:\.\d+)?)?\s*[\)\]]\s*$", title, re.IGNORECASE)
+    if parenthesised and parenthesised.start() > 0:
+        title = title[: parenthesised.start()].rstrip(" :-\u2013\u2014")
     if len(title) > len(series):
         if title.casefold().endswith(series.casefold()):
             title = title[: -len(series)].rstrip(" :-\u2013\u2014")

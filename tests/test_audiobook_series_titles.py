@@ -56,3 +56,10 @@ def test_extract_audiobook_history_series_format():
 
 def test_extract_audiobook_series_keeps_regular_subtitle():
     assert extract_audiobook_series_from_title("Livro Exemplo: Uma investigação fictícia") == ("Livro Exemplo: Uma investigação fictícia", "", "")  # noqa: S101
+
+
+def test_normalize_audiobook_title_removes_parenthesised_series_suffix():
+    assert normalize_audiobook_title("Sunrise on the Reaping (The Hunger Games)", "The Hunger Games") == "Sunrise on the Reaping"  # noqa: S101
+    assert normalize_audiobook_title("Catching Fire (Hunger Games, Book 2)", "Hunger Games") == "Catching Fire"  # noqa: S101
+    assert normalize_audiobook_title("Mockingjay [The Hunger Games #3]", "The Hunger Games", "3") == "Mockingjay"  # noqa: S101
+    assert normalize_audiobook_title("(The Hunger Games)", "The Hunger Games") == "(The Hunger Games)"  # noqa: S101
