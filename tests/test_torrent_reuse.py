@@ -497,7 +497,8 @@ async def test_reuse_validation_compares_file_structure(tmp_path, mode, torrent_
 
     valid, _ = await Clients({}).is_valid_torrent(meta, str(torrent_path), torrent.infohash, "qbit", {})
 
-    assert valid is expected  # noqa: S101
+    # The right files under another folder name are still a renamed release.
+    assert valid is (expected and torrent_name == release.name)  # noqa: S101
 
 
 @pytest.mark.asyncio
@@ -536,6 +537,35 @@ async def test_reuse_validation_checks_single_file_root(tmp_path, mode, torrent_
     valid, _ = await Clients({}).is_valid_torrent(meta, str(torrent_path), torrent.infohash, "qbit", {})
 
     assert valid is expected
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "torrent_root,expected",
+    [
+        # The release folder as it was first uploaded, two years before the cross-seeds.
+        ("Limmys.Show.S03.1080p.NF.WEB-DL.DD2.0.x264-NTb", True),
+        # Cross-seeds of the same files that another site had put under a renamed folder.
+        ("Limmys.Show.S03.1080p.NF.WEB-DL.DDP2.0.X264-NTb", False),
+        ("Limmys.Show.S03.1080p.NF.WEB-DL.DDP2.0.x264-NTb", False),
+    ],
+)
+async def test_reuse_rejects_a_season_pack_under_a_renamed_folder(tmp_path, torrent_root, expected):
+    release = tmp_path / "Limmys.Show.S03.1080p.NF.WEB-DL.DD2.0.x264-NTb"
+    release.mkdir()
+    episodes = [release / f"Limmys.Show.S03E0{number}.1080p.NF.WEB-DL.DDP2.0.x264-NTb.mkv" for number in (1, 2)]
+    for episode in episodes:
+        episode.write_bytes(b"video" * 1000)
+    torrent = Torrent(path=release, piece_size=32768)
+    torrent.name = torrent_root
+    torrent.generate()
+    torrent_path = tmp_path / "candidate.torrent"
+    torrent.write(torrent_path)
+    meta = Meta(path=str(release), uuid=release.name, filelist=[str(episode) for episode in episodes], isdir=True, category="TV")
+
+    valid, _ = await Clients({}).is_valid_torrent(meta, str(torrent_path), torrent.infohash, "qbit", {})
+
+    assert valid is expected  # noqa: S101
 
 
 @pytest.mark.asyncio

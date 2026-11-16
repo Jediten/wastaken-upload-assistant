@@ -805,7 +805,12 @@ class Clients(QbittorrentClientMixin, RtorrentClientMixin, DelugeClientMixin, Tr
                     candidate_layout = sorted(Path(file).relative_to(root).as_posix() for file in cand)
                 except ValueError:
                     continue
-                valid = torrent_layout == candidate_layout and (not keep_root or root.name == torrent_name)
+                # A torrent made here is named after the release folder. One under another
+                # folder name (a site's or a cross-seed's rename) would be uploaded renamed.
+                if torrent_layout == candidate_layout and root.name != torrent_name:
+                    logger.info(f"[yellow]Not reusing {torrent_path}: its folder {torrent_name!r} is not the release folder {root.name!r}")
+                    continue
+                valid = torrent_layout == candidate_layout
             if valid:
                 break
 
