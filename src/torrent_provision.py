@@ -50,6 +50,8 @@ async def provision_tracker_torrents(
 ) -> set[str]:
     """Prepare manifest selections and return trackers blocked by constraints."""
     manifest = TorrentManifest(meta.base_dir, meta.uuid)
+    if meta.path:
+        await asyncio.to_thread(manifest.drop_renamed_reuses, meta.path, list(meta.filelist or ()))
     blocked: dict[str, str] = {}
     raw_tracker_configs: object = config.get("TRACKERS", {})
     tracker_configs: Mapping[str, Any] = raw_tracker_configs if _is_str_mapping(raw_tracker_configs) else {}

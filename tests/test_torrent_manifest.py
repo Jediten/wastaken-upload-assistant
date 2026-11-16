@@ -310,3 +310,56 @@ async def test_provision_still_picks_a_compliant_variant_for_a_tracker_with_a_pi
 
     assert blocked == set()
     assert manifest.selected_path("PASSTHEPOPCORN") == manifest.entry_path(small)
+
+
+def write_season_pack(path: Path, root: str, piece_size: int = 4 * MIB) -> Torrent:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    torrent = Torrent()
+    files = [{"path": [f"Show.S03E0{number}.1080p.WEB-DL-NTb.mkv"], "length": 4 * MIB} for number in (1, 2)]
+    torrent.metainfo["info"] = {"name": root, "files": files, "piece length": piece_size, "pieces": b"x" * (20 * 2)}
+    torrent.write(path, overwrite=True)
+    return torrent
+
+
+@pytest.mark.asyncio
+async def test_rerun_does_not_take_a_renamed_torrent_from_an_earlier_runs_cache(tmp_path):
+    from src.meta import Meta
+
+    release = tmp_path / "Limmys.Show.S03.1080p.NF.WEB-DL.DD2.0.x264-NTb"
+    release.mkdir()
+    episodes = [release / f"Show.S03E0{number}.1080p.WEB-DL-NTb.mkv" for number in (1, 2)]
+    for episode in episodes:
+        episode.touch()
+    # The earlier run cached a cross-seed that another site had renamed, made it the
+    # default and chose it for the tracker, next to a copy under the release's own name.
+    write_season_pack(tmp_path / "renamed.torrent", "Limmys.Show.S03.1080p.NF.WEB-DL.DDP2.0.X264-NTb")
+    write_season_pack(tmp_path / "original.torrent", release.name)
+    manifest = TorrentManifest(tmp_path, release.name)
+    renamed = manifest.register(tmp_path / "renamed.torrent", "base", "client:qbittorrent")
+    original = manifest.register(tmp_path / "original.torrent", "base", "client:qbittorrent")
+    manifest.select("NIGHTBLOOM", "base", preferred=[manifest.entry_path(renamed)])
+    meta = Meta(base_dir=str(tmp_path), uuid=release.name, path=str(release), filelist=[str(episode) for episode in episodes], trackers=["NIGHTBLOOM"])
+
+    blocked = await provision_tracker_torrents(meta, {"TRACKERS": {"NIGHTBLOOM": {}}}, ["NIGHTBLOOM"], {"NIGHTBLOOM": _TrackerWithoutPolicy})
+
+    assert blocked == set()  # noqa: S101
+    assert manifest.selected_path("NIGHTBLOOM") == manifest.entry_path(original)  # noqa: S101
+    assert manifest.default_path("base") == manifest.entry_path(original)  # noqa: S101
+    assert [entry.id for entry in manifest.entries("base")] == [original.id]  # noqa: S101
+
+
+def test_only_reused_torrents_are_dropped_for_their_name(tmp_path):
+    media = tmp_path / "release.mkv"
+    media.touch()
+    write_torrent(tmp_path / "generated.torrent", name="other-name.mkv")
+    write_torrent(tmp_path / "reused.torrent", size=16 * MIB, name="renamed.mkv")
+    write_torrent(tmp_path / "kept.torrent", size=24 * MIB)
+    manifest = TorrentManifest(tmp_path, "release")
+    generated = manifest.register(tmp_path / "generated.torrent", "base", "generated")
+    manifest.register(tmp_path / "reused.torrent", "base", "directory")
+    kept = manifest.register(tmp_path / "kept.torrent", "base", "client:qbit")
+
+    dropped = manifest.drop_renamed_reuses(media, [str(media)])
+
+    assert dropped == ["renamed.mkv"]  # noqa: S101
+    assert {entry.id for entry in manifest.entries("base")} == {generated.id, kept.id}  # noqa: S101

@@ -11,6 +11,7 @@ from typing import Any, Literal, TypeIs, cast
 
 from torf import TorfError, Torrent
 
+from src.console import logger
 from src.temp_paths import release_temp_dir
 from src.torrent_policy import TorrentPolicy, TorrentStats
 
@@ -158,6 +159,51 @@ class TorrentManifest:
                 defaults[layout] = entry_id
             self._save(manifest)
             return entry
+
+    def drop_renamed_reuses(self, release_path: str | Path, filelist: Sequence[str] = ()) -> list[str]:
+        """Forget reused torrents whose root is not named after the release.
+
+        A torrent made here takes the release folder's name, or the file's name
+        for a single file. A reused one under any other name is a rename by some
+        site, and a rerun must not pick it from an earlier run's cache.
+        """
+        release = Path(release_path)
+        folder = release if release.is_dir() else release.parent
+        file_names = {Path(file).name for file in filelist} | ({release.name} if release.is_file() else set())
+        with self._lock:
+            manifest = self._load()
+            torrents = cast(dict[str, Any], manifest["torrents"])
+            dropped: dict[str, str] = {}
+            for entry_id, value in list(torrents.items()):
+                if not _is_str_dict(value) or value.get("origin") == "generated":
+                    continue
+                try:
+                    torrent = Torrent.read(self._resolve(str(value.get("file", ""))))
+                except OSError, TorfError, TypeError, ValueError:
+                    continue
+                name = str(torrent.name or "")
+                expected = name == folder.name if torrent.mode == "multifile" else name in file_names
+                if not expected:
+                    dropped[entry_id] = name
+                    torrents.pop(entry_id)
+            if not dropped:
+                return []
+            selections = cast(dict[str, Any], manifest["selections"])
+            for tracker, entry_id in list(selections.items()):
+                if entry_id in dropped:
+                    selections.pop(tracker)
+            defaults = cast(dict[str, Any], manifest["defaults"])
+            for layout, entry_id in list(defaults.items()):
+                if entry_id in dropped:
+                    remaining = sorted(other for other, value in torrents.items() if _is_str_dict(value) and value.get("layout") == layout)
+                    if remaining:
+                        defaults[layout] = remaining[0]
+                    else:
+                        defaults.pop(layout)
+            self._save(manifest)
+        for name in dropped.values():
+            logger.info(f"[yellow]Not reusing the cached torrent {name!r}: it is not named after the release folder {folder.name!r}")
+        return list(dropped.values())
 
     def entries(self, layout: TorrentLayout | None = None) -> list[TorrentEntry]:
         manifest = self._load()

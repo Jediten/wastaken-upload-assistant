@@ -107,6 +107,8 @@ async def create_base_torrents_early(meta: Meta, client: Clients) -> None:
         return
 
     manifest = TorrentManifest(meta.base_dir, meta.uuid)
+    if meta.path:
+        await asyncio.to_thread(manifest.drop_renamed_reuses, meta.path, list(meta.filelist or ()))
     torrent_path = manifest.default_path("base")
     subs_torrent_path = manifest.default_path("base_subs")
     needs_subs = bool(meta.subtitle_files) and subs_torrent_path is None
