@@ -1,5 +1,6 @@
 # Upload Assistant © 2025 Audionut & wastaken7 — Licensed under UAPL v1.0
 import re
+from pathlib import Path
 from typing import Any
 
 from src.meta import Meta
@@ -92,6 +93,10 @@ class Nightbloom(UNIT3D):
         # dots; a folder the user renamed has no group name to keep, so it gets the
         # generated name instead.
         original = (meta.scene_name or meta.basename_no_ext or "").strip()
+        # A folder holding one episode can carry the season's name (S02 for
+        # S02E01). The episode file has the name that matches the upload.
+        if not meta.scene_name and meta.isdir and not meta.tv_pack and meta.episode and len(meta.filelist) == 1:
+            original = Path(meta.filelist[0]).stem.strip()
         tag = (meta.tag or "").strip()
         if original and tag and original.casefold().endswith(tag.casefold()):
             return {"name": _spaced(original)}

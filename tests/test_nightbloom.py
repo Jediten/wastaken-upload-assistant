@@ -117,3 +117,33 @@ def test_name_keeps_the_group_release_name(fields, expected):
     meta = Meta(category="TV", name="My Hero Academia S02 1080p BluRay REMUX AVC TrueHD 5.1-ZR", **fields)
 
     assert asyncio.run(tracker().get_name(meta))["name"] == expected  # noqa: S101
+
+
+def test_a_single_episode_in_a_season_folder_is_named_after_the_episode_file():
+    meta = Meta(
+        category="TV",
+        name="Day Pass S02E01 2160p NBLA WEB-DL AAC 2.0 H.265-Jeditwo",
+        basename_no_ext="Day.Pass.S02.2160p.NBLA.WEB-DL.AAC2.0.H.265-Jeditwo",
+        isdir=True,
+        season="S02",
+        episode="E01",
+        filelist=["/data/Day.Pass.S02.2160p.NBLA.WEB-DL.AAC2.0.H.265-Jeditwo/Day.Pass.S02E01.Not.Just.Beef.2160p.NBLA.WEB-DL.AAC2.0.H.265-Jeditwo.mkv"],
+        tag="-Jeditwo",
+    )
+
+    assert asyncio.run(tracker().get_name(meta))["name"] == "Day Pass S02E01 Not Just Beef 2160p NBLA WEB-DL AAC2.0 H.265-Jeditwo"  # noqa: S101
+
+
+def test_a_season_pack_keeps_the_folder_name():
+    meta = Meta(
+        category="TV",
+        name="Day Pass S02 2160p NBLA WEB-DL AAC 2.0 H.265-Jeditwo",
+        basename_no_ext="Day.Pass.S02.2160p.NBLA.WEB-DL.AAC2.0.H.265-Jeditwo",
+        isdir=True,
+        tv_pack=True,
+        season="S02",
+        filelist=[f"/data/Day.Pass.S02E0{n}.2160p.NBLA.WEB-DL.AAC2.0.H.265-Jeditwo.mkv" for n in (1, 2)],
+        tag="-Jeditwo",
+    )
+
+    assert asyncio.run(tracker().get_name(meta))["name"] == "Day Pass S02 2160p NBLA WEB-DL AAC2.0 H.265-Jeditwo"  # noqa: S101
