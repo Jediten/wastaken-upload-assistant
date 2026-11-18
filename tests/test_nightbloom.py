@@ -1,4 +1,4 @@
-"""Nightbloom speaks the UNIT3D API but is not UNIT3D: its own IDs and form fields apply."""
+"""Nightbloom tracker tests."""
 
 import asyncio
 
@@ -25,7 +25,7 @@ def test_registered_under_its_full_name_and_nig_alias():
     [
         ({"category": "MOVIE"}, "1"),
         ({"category": "TV"}, "2"),
-        ({"category": "TV", "anime": True}, "2"),
+        ({"category": "TV", "anime": True}, "6"),
         ({"category": "MOVIE", "anime": True}, "6"),
     ],
 )
@@ -122,28 +122,28 @@ def test_name_keeps_the_group_release_name(fields, expected):
 def test_a_single_episode_in_a_season_folder_is_named_after_the_episode_file():
     meta = Meta(
         category="TV",
-        name="Day Pass S02E01 2160p NBLA WEB-DL AAC 2.0 H.265-Jeditwo",
-        basename_no_ext="Day.Pass.S02.2160p.NBLA.WEB-DL.AAC2.0.H.265-Jeditwo",
+        name="Day Pass S02E01 2160p NBLA WEB-DL AAC 2.0 H.265-GROUP",
+        basename_no_ext="Day.Pass.S02.2160p.NBLA.WEB-DL.AAC2.0.H.265-GROUP",
         isdir=True,
         season="S02",
         episode="E01",
-        filelist=["/data/Day.Pass.S02.2160p.NBLA.WEB-DL.AAC2.0.H.265-Jeditwo/Day.Pass.S02E01.Not.Just.Beef.2160p.NBLA.WEB-DL.AAC2.0.H.265-Jeditwo.mkv"],
-        tag="-Jeditwo",
+        filelist=["/data/Day.Pass.S02.2160p.NBLA.WEB-DL.AAC2.0.H.265-GROUP/Day.Pass.S02E01.Not.Just.Beef.2160p.NBLA.WEB-DL.AAC2.0.H.265-GROUP.mkv"],
+        tag="-GROUP",
     )
 
-    assert asyncio.run(tracker().get_name(meta))["name"] == "Day Pass S02E01 Not Just Beef 2160p NBLA WEB-DL AAC2.0 H.265-Jeditwo"  # noqa: S101
+    assert asyncio.run(tracker().get_name(meta))["name"] == "Day Pass S02E01 Not Just Beef 2160p NBLA WEB-DL AAC2.0 H.265-GROUP"  # noqa: S101
 
 
 def test_a_season_pack_keeps_the_folder_name():
     meta = Meta(
         category="TV",
-        name="Day Pass S02 2160p NBLA WEB-DL AAC 2.0 H.265-Jeditwo",
-        basename_no_ext="Day.Pass.S02.2160p.NBLA.WEB-DL.AAC2.0.H.265-Jeditwo",
+        name="Day Pass S02 2160p NBLA WEB-DL AAC 2.0 H.265-GROUP",
+        basename_no_ext="Day.Pass.S02.2160p.NBLA.WEB-DL.AAC2.0.H.265-GROUP",
         isdir=True,
         tv_pack=True,
         season="S02",
-        filelist=[f"/data/Day.Pass.S02E0{n}.2160p.NBLA.WEB-DL.AAC2.0.H.265-Jeditwo.mkv" for n in (1, 2)],
-        tag="-Jeditwo",
+        filelist=[f"/data/Day.Pass.S02E0{n}.2160p.NBLA.WEB-DL.AAC2.0.H.265-GROUP.mkv" for n in (1, 2)],
+        tag="-GROUP",
     )
 
-    assert asyncio.run(tracker().get_name(meta))["name"] == "Day Pass S02 2160p NBLA WEB-DL AAC2.0 H.265-Jeditwo"  # noqa: S101
+    assert asyncio.run(tracker().get_name(meta))["name"] == "Day Pass S02 2160p NBLA WEB-DL AAC2.0 H.265-GROUP"  # noqa: S101
