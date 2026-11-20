@@ -374,7 +374,7 @@ class Luminance:
             menu_screenshots=False,
             tonemapped_header=False,
             approved_image_hosts=list(self.approved_image_hosts),
-            signature=f"[align=right][url=https://github.com/wastaken7/Upload-Assistant][size=1]{meta.ua_signature}[/size][/url][/align]",
+            signature=f"[align=right][url=https://github.com/Jediten/wastaken-upload-assistant][size=1]{meta.ua_signature}[/size][/url][/align]",
         )
         if not self.has_mediainfo_field and (mediainfo := (await self.get_mediainfo(meta)).strip()):
             description = f"{description}\n\n[spoiler=MediaInfo][code]{mediainfo}[/code][/spoiler]"
