@@ -4,19 +4,31 @@ from typing import Any, ClassVar
 
 from src.console import logger
 from src.get_desc import DescriptionBuilder
-from src.languages import languages_manager
 from src.meta import Meta
 from src.rehostimages import ImageHostPolicy, RehostImagesManager
 from src.trackers.common import Common
+from src.trackers.naming import BLU_EDITION_TERMS, VideoNameRules, build_video_name
 from src.trackers.UNIT3D import UNIT3D
 
 Config = dict[str, Any]
+
+# STC's guide follows Aither's template, but a foreign-language label sits right before the audio
+# ("NF WEB-DL FRENCH DD+ 5.1"), and DVD-sourced releases omit resolution and video codec.
+STC_NAME_RULES = VideoNameRules(
+    language_slot="before_audio",
+    english_dub_only=True,
+    edition_terms=BLU_EDITION_TERMS,
+    honor_manual_year_on_tv=True,
+)
 
 
 class SkipTheCommercials(UNIT3D):
     """
     SkipTheCommercials (STC) is a Private Torrent Tracker for TV and
     documentary movies.
+
+    Naming guide: https://skipthecommercials.xyz/wikis/3
+    Synced with: last updated May 24, 2026.
     """
 
     # Options of the ID fields, offered in the Web UI preview (the getters ignore mapping_only).
@@ -145,6 +157,13 @@ class SkipTheCommercials(UNIT3D):
         self.common = Common(config)
         self.rehost_images_manager = RehostImagesManager(config)
 
+    async def get_name(self, meta: Meta) -> dict[str, str]:
+        # A manual --name or a type outside the guide falls back to the generic name.
+        name = await build_video_name(meta, STC_NAME_RULES, self.tracker) or (await super().get_name(meta))["name"]
+        if meta.manual_name is None and not str(meta.tag or "").strip("- "):
+            name = f"{name}-NOGROUP"
+        return {"name": name}
+
     async def get_type_id(
         self,
         meta: Meta,
@@ -188,25 +207,6 @@ class SkipTheCommercials(UNIT3D):
             passed = False
 
         return passed
-
-    async def get_name(self, meta: Meta) -> dict[str, str]:
-        stc_name = meta.name
-
-        # Non-English audio gets its language ahead of the audio codec; full discs are exempt
-        if meta.is_disc not in ["BDMV", "DVD"]:
-            if not meta.language_checked:
-                await languages_manager.process_desc_language(meta, tracker=self.tracker)
-            audio_languages: list[str] = [] if not meta.audio_languages else meta.audio_languages
-            audio = meta.audio or ""
-            if audio_languages and not await languages_manager.has_english_language(audio_languages):
-                foreign_lang = audio_languages[0].upper()
-                if audio and foreign_lang not in stc_name.upper():
-                    stc_name = stc_name.replace(audio, f"{foreign_lang} {audio}", 1)
-
-        if not str(meta.tag or "").strip("- "):
-            stc_name = f"{stc_name}-NOGROUP"
-
-        return {"name": stc_name}
 
     async def get_description(self, meta: Meta) -> dict[str, str]:
         return {

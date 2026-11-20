@@ -9,6 +9,8 @@ from pathlib import Path
 
 import pytest
 
+import web_ui.preview as webui_preview
+import web_ui.security as webui_security
 from src.description_review import load_review
 from src.get_desc import DescriptionBuilder, gen_desc
 from src.meta import Meta
@@ -52,17 +54,18 @@ def test_webui_description_api_saves_an_execution_scoped_override(tmp_path, monk
     def resolve(_session_id):
         return temp_dir, meta_file, {"uuid": "release", "description": "tracker text"}
 
-    monkeypatch.setattr(server, "_resolve_execution_description_review", resolve)
-    monkeypatch.setattr(server, "_webui_auth_ok", lambda: True)
-    monkeypatch.setattr(server, "_verify_csrf_header", lambda: True)
+    monkeypatch.setattr(webui_preview, "_resolve_execution_description_review", resolve)
+    monkeypatch.setattr(webui_security, "_webui_auth_ok", lambda: True)
+    monkeypatch.setattr(webui_security, "_verify_csrf_header", lambda: True)
     with server.app.test_client() as client:
         initial = client.get("/api/execution_description?session_id=session")
         assert initial.status_code == 200
         assert initial.get_json()["content"] == "tracker text"
+        assert initial.get_json()["media_id"] == "release"
 
         response = client.put(
             "/api/execution_description",
-            json={"session_id": "session", "content": "edited text", "version": 0},
+            json={"session_id": "session", "media_id": "release", "content": "edited text", "version": 0},
             headers={"Origin": "http://localhost"},
         )
 
@@ -82,24 +85,24 @@ def test_webui_description_api_rejects_stale_save_and_reset_versions(tmp_path, m
     def resolve(_session_id):
         return temp_dir, meta_file, json.loads(meta_file.read_text(encoding="utf-8"))
 
-    monkeypatch.setattr(server, "_resolve_execution_description_review", resolve)
-    monkeypatch.setattr(server, "_webui_auth_ok", lambda: True)
-    monkeypatch.setattr(server, "_verify_csrf_header", lambda: True)
+    monkeypatch.setattr(webui_preview, "_resolve_execution_description_review", resolve)
+    monkeypatch.setattr(webui_security, "_webui_auth_ok", lambda: True)
+    monkeypatch.setattr(webui_security, "_verify_csrf_header", lambda: True)
     headers = {"Origin": "http://localhost"}
     with server.app.test_client() as client:
         saved = client.put(
             "/api/execution_description",
-            json={"session_id": "session", "content": "first edit", "version": 0},
+            json={"session_id": "session", "media_id": "release", "content": "first edit", "version": 0},
             headers=headers,
         )
         stale_save = client.put(
             "/api/execution_description",
-            json={"session_id": "session", "content": "stale edit", "version": 0},
+            json={"session_id": "session", "media_id": "release", "content": "stale edit", "version": 0},
             headers=headers,
         )
         stale_reset = client.post(
             "/api/execution_description/reset",
-            json={"session_id": "session", "source_key": "description", "version": 0},
+            json={"session_id": "session", "media_id": "release", "source_key": "description", "version": 0},
             headers=headers,
         )
 
@@ -108,52 +111,32 @@ def test_webui_description_api_rejects_stale_save_and_reset_versions(tmp_path, m
     assert stale_reset.status_code == 409
 
 
-def test_webui_description_api_follows_the_queue_to_the_next_release(tmp_path, monkeypatch):
-    releases = {}
-    for name in ("first", "second"):
-        temp_dir = tmp_path / name
-        temp_dir.mkdir()
-        meta_file = temp_dir / "meta.json"
-        meta_file.write_text(json.dumps({"uuid": name, "description": f"{name} text"}), encoding="utf-8")
-        releases[name] = (temp_dir, meta_file)
-    current = {"name": "first"}
+@pytest.mark.parametrize(
+    "endpoint,method,body",
+    [
+        ("/api/execution_description", "put", {"content": "text for the previous item"}),
+        ("/api/execution_description/reset", "post", {"source_key": "description"}),
+    ],
+)
+@pytest.mark.parametrize("media_id,status", [("previous-item", 409), (None, 400)])
+def test_webui_description_writes_must_target_the_current_item(tmp_path, monkeypatch, endpoint, method, body, media_id, status):
+    temp_dir = tmp_path / "current-item"
+    temp_dir.mkdir()
+    meta = {"uuid": "current-item", "description": "tracker text"}
+    meta_file = temp_dir / "meta.json"
+    meta_file.write_text(json.dumps(meta), encoding="utf-8")
+    monkeypatch.setattr(webui_preview, "_resolve_execution_description_review", lambda _session_id: (temp_dir, meta_file, dict(meta)))
+    monkeypatch.setattr(webui_security, "_webui_auth_ok", lambda: True)
+    monkeypatch.setattr(webui_security, "_verify_csrf_header", lambda: True)
+    payload = {"session_id": "session", "version": 0, **body}
+    if media_id is not None:
+        payload["media_id"] = media_id
 
-    def resolve(_session_id):
-        temp_dir, meta_file = releases[current["name"]]
-        return temp_dir, meta_file, json.loads(meta_file.read_text(encoding="utf-8"))
-
-    monkeypatch.setattr(server, "_resolve_execution_description_review", resolve)
-    monkeypatch.setattr(server, "_webui_auth_ok", lambda: True)
-    monkeypatch.setattr(server, "_verify_csrf_header", lambda: True)
-    headers = {"Origin": "http://localhost"}
     with server.app.test_client() as client:
-        first = client.get("/api/execution_description?session_id=session").get_json()
-        client.put(
-            "/api/execution_description",
-            json={"session_id": "session", "content": "first edit", "version": 0, "target": first["target"]},
-            headers=headers,
-        )
-        current["name"] = "second"
-        second = client.get("/api/execution_description?session_id=session").get_json()
-        late_first_edit = client.put(
-            "/api/execution_description",
-            json={"session_id": "session", "content": "first edit again", "version": 0, "target": first["target"]},
-            headers=headers,
-        )
-        second_edit = client.put(
-            "/api/execution_description",
-            json={"session_id": "session", "content": "second edit", "version": 0, "target": second["target"]},
-            headers=headers,
-        )
+        response = getattr(client, method)(endpoint, json=payload, headers={"Origin": "http://localhost"})
 
-    assert first["target"] == "first"
-    # The next release starts its own draft at version 0, so the browser must key on the target, not the version.
-    assert second == {**second, "target": "second", "content": "second text", "version": 0}
-    assert late_first_edit.status_code == 409
-    assert late_first_edit.get_json()["target"] == "second"
-    assert second_edit.status_code == 200
-    assert load_review(releases["first"][0]) == {"content": "first edit", "version": 1}
-    assert load_review(releases["second"][0]) == {"content": "second edit", "version": 1}
+    assert response.status_code == status
+    assert sorted(path.name for path in temp_dir.iterdir()) == ["meta.json"]
 
 
 def test_base_description_is_kept_in_meta_without_creating_description_file(tmp_path):

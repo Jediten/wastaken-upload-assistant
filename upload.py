@@ -295,7 +295,7 @@ _config_path = Path(_data_dir) / "config.py"
 from src.book_prep import sanitize_book_author, sanitize_book_language
 from src.meta import Meta
 from src.post_upload_hooks import run_post_upload_hooks
-from src.prep import Prep
+from src.prep import Prep, capture_extra_disc_screenshots
 
 # Enable ANSI colors on Windows
 _use_colors = True
@@ -1569,6 +1569,8 @@ async def _process_meta_screens(
                             0,
                             cleanup_after_capture=False,
                         )
+                        # Covers runs whose early capture was skipped or failed.
+                        await capture_extra_disc_screenshots(meta, config, takescreens_manager)
                     except asyncio.CancelledError as e:
                         await cleanup_screenshot_temp_files(meta)
                         await asyncio.sleep(0.1)
@@ -1593,6 +1595,7 @@ async def _process_meta_screens(
                             retry_cap=False,
                             cleanup_after_capture=False,
                         )
+                        await capture_extra_disc_screenshots(meta, config, takescreens_manager)
                     except asyncio.CancelledError as e:
                         await cleanup_screenshot_temp_files(meta)
                         await asyncio.sleep(0.1)
@@ -1990,6 +1993,15 @@ async def _process_meta_screens(
     return True
 
 
+def _randomized_torrents_possible(meta: Meta, base_torrent: Path | None) -> bool:
+    """Randomized torrents are copies of the base torrent.
+
+    A --nohash run cannot create a missing base, so there is nothing to copy.
+    A hashing run without a base is a real error and must still surface.
+    """
+    return base_torrent is not None or not meta.nohash
+
+
 async def process_meta(meta: Meta, base_dir: str) -> bool:
     """Process the metadata for each queued path."""
     if not meta.imghost:
@@ -2371,7 +2383,10 @@ async def process_meta(meta: Meta, base_dir: str) -> bool:
                 base_piece_mb = None
 
     if meta.randomized >= 1 and not meta.mkbrr and not is_usenet_only:
-        TORRENT_CREATOR.create_random_torrents(meta.base_dir, meta.uuid, meta.randomized, cast(str, meta.path))
+        if _randomized_torrents_possible(meta, torrent_path):
+            TORRENT_CREATOR.create_random_torrents(meta.base_dir, meta.uuid, meta.randomized, cast(str, meta.path))
+        else:
+            logger.warning("[yellow]Skipping randomized torrents: no base torrent is available and --nohash is set.")
     webui_events.stage("torrent", "done")
 
     await write_meta_file(meta)

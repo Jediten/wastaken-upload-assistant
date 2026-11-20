@@ -9,10 +9,10 @@ import pytest
 
 import src.description_review as description_review
 import src.get_tracker_data as get_tracker_data
+import web_ui.processes as webui_processes
 from src.description_review import edit_description, load_review
 from src.get_tracker_data import TrackerDataManager
 from src.meta import Meta
-from web_ui import server
 
 
 def _meta(tmp_path: Path, **values: object) -> Meta:
@@ -28,7 +28,7 @@ def _editor_must_not_run(*_args: object, **_kwargs: object) -> None:
 
 
 def test_webui_child_environment_routes_description_edits_to_the_panel():
-    assert server._webui_subprocess_env()["UA_WEBUI_ACTIVE"] == "1"
+    assert webui_processes._webui_subprocess_env()["UA_WEBUI_ACTIVE"] == "1"
 
 
 def test_webui_edit_stages_each_request_as_a_new_draft_version(tmp_path, monkeypatch):

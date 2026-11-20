@@ -339,7 +339,7 @@ class Meta:
     manual: bool = False
     matched_episode_ids: int | None = None
     matched_tracker: str = ""
-    max_piece_size: int = 0
+    max_piece_size: int | None = None
     mediainfo: dict[str, Any] = field(default_factory=dict[str, Any])
     mediainfo_file: str | None = None
     menu_images: list[dict[str, Any]] = field(default_factory=list[dict[str, Any]])
@@ -421,7 +421,6 @@ class Meta:
     original_tmdb: int = 0
     original_tvdb: int = 0
     original_tvmaze: int = 0
-    # Set when the user answers no to a tracker check's own "upload anyway?" question.
     overview_meta: str = ""
     overview: str = ""
     part: str = ""

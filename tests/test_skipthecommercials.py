@@ -73,26 +73,31 @@ def test_skipthecommercials_bans_listed_groups(tracker: SkipTheCommercials) -> N
     assert "YTS" in tracker.banned_groups  # noqa: S101
 
 
+def _tv_meta(**overrides: object) -> Meta:
+    fields: dict[str, object] = {
+        "category": "TV",
+        "type": "HDTV",
+        "title": "Show",
+        "season": "S01",
+        "resolution": "720p",
+        "source": "HDTV",
+        "audio": "AAC 2.0",
+        "video_encode": "H.264",
+        "audio_languages": ["English"],
+        "language_checked": True,
+    }
+    fields.update(overrides)
+    return Meta(**fields)
+
+
 @pytest.mark.parametrize(
     ("meta", "expected"),
     [
-        (
-            Meta(name="Show S01 1080p WEB-DL AAC 2.0 H.264-GRP", audio="AAC 2.0", audio_languages=["French"], language_checked=True, tag="-GRP"),
-            "Show S01 1080p WEB-DL FRENCH AAC 2.0 H.264-GRP",
-        ),
-        (
-            Meta(name="Show S01 1080p WEB-DL AAC 2.0 H.264-GRP", audio="AAC 2.0", audio_languages=["English", "French"], language_checked=True, tag="-GRP"),
-            "Show S01 1080p WEB-DL AAC 2.0 H.264-GRP",
-        ),
-        (
-            Meta(name="Show S01 1080p BluRay DTS-HD MA 5.1 AVC", audio="DTS-HD MA 5.1", audio_languages=["French"], language_checked=True, is_disc="BDMV"),
-            "Show S01 1080p BluRay DTS-HD MA 5.1 AVC-NOGROUP",
-        ),
-        (
-            Meta(name="Show S01 720p HDTV AAC 2.0 H.264", audio="AAC 2.0", audio_languages=["English"], language_checked=True),
-            "Show S01 720p HDTV AAC 2.0 H.264-NOGROUP",
-        ),
+        (_tv_meta(tag="-GRP"), "Show S01 720p HDTV AAC 2.0 H.264-GRP"),
+        (_tv_meta(), "Show S01 720p HDTV AAC 2.0 H.264-NOGROUP"),
+        (_tv_meta(audio_languages=["French"]), "Show S01 720p HDTV FRENCH AAC 2.0 H.264-NOGROUP"),
+        (_tv_meta(manual_name="Show S01 Custom"), "Show S01 Custom"),
     ],
 )
-def test_skipthecommercials_name_adds_foreign_language_and_nogroup(tracker: SkipTheCommercials, meta: Meta, expected: str) -> None:
+def test_skipthecommercials_name_adds_nogroup(tracker: SkipTheCommercials, meta: Meta, expected: str) -> None:
     assert asyncio.run(tracker.get_name(meta)) == {"name": expected}  # noqa: S101

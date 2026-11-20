@@ -2997,9 +2997,6 @@ function AudionutsUAGUI() {
   const descriptionVersionRef = useRef(
     screenshotMode?.description.version || 0,
   );
-  // Which queue item the draft belongs to. Versions restart at 0 for every
-  // release, so they can only be compared within the same item.
-  const descriptionTargetRef = useRef("");
   // Media id of the item the description draft state belongs to; a queue moves on without a new session.
   const descriptionMediaRef = useRef(null);
   const descriptionEditorRef = useRef(null);
@@ -4455,7 +4452,6 @@ function AudionutsUAGUI() {
       setDescriptionDraft("");
       setDescriptionView("edit");
       descriptionVersionRef.current = 0;
-      descriptionTargetRef.current = "";
       descriptionMediaRef.current = null;
       setDescriptionVersion(0);
       setDescriptionDirty(false);
@@ -4549,27 +4545,12 @@ function AudionutsUAGUI() {
           const polledVersion = Number.isInteger(descriptionData?.version)
             ? descriptionData.version
             : null;
-          const polledTarget =
-            typeof descriptionData?.target === "string"
-              ? descriptionData.target
-              : "";
+          // The queue can advance between the preview and description
+          // requests; keep the draft bound to the item the editor shows.
           if (
             !cancelled &&
             descriptionData?.success &&
-            polledVersion !== null &&
-            polledTarget !== descriptionTargetRef.current
-          ) {
-            // The queue moved on: start over with this release's draft.
-            descriptionTargetRef.current = polledTarget;
-            descriptionVersionRef.current = polledVersion;
-            descriptionDirtyRef.current = false;
-            setExecutionDescription(descriptionData);
-            setDescriptionDraft(descriptionData.content || "");
-            setDescriptionVersion(polledVersion);
-            setDescriptionDirty(false);
-          } else if (
-            !cancelled &&
-            descriptionData?.success &&
+            descriptionData.media_id === descriptionMediaRef.current &&
             polledVersion !== null &&
             polledVersion >= descriptionVersionRef.current
           ) {
@@ -8440,9 +8421,9 @@ function AudionutsUAGUI() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           session_id: sessionId,
+          media_id: mediaId,
           content,
           version: descriptionVersion,
-          target: descriptionTargetRef.current,
         }),
       });
       const data = await response.json().catch(() => null);
@@ -8488,9 +8469,9 @@ function AudionutsUAGUI() {
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             session_id: sessionId,
+            media_id: mediaId,
             source_key: sourceKey,
             version: descriptionVersion,
-            target: descriptionTargetRef.current,
           }),
         },
       );
