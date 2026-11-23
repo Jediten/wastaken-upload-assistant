@@ -932,11 +932,15 @@ def normalize_audiobook_title(title: str, series: str, series_index: str = "") -
     parenthesised = re.search(r"\s*[\(\[]\s*" + re.escape(series) + r"(?:\s*,?\s*(?:book|vol(?:ume)?|#)?\s*\d+(?:\.\d+)?)?\s*[\)\]]\s*$", title, re.IGNORECASE)
     if parenthesised and parenthesised.start() > 0:
         title = title[: parenthesised.start()].rstrip(" :-\u2013\u2014")
-    if len(title) > len(series):
-        if title.casefold().endswith(series.casefold()):
-            title = title[: -len(series)].rstrip(" :-\u2013\u2014")
-        elif title.casefold().startswith(series.casefold()):
-            title = title[len(series) :].lstrip(" :-\u2013\u2014")
+    # The series only counts as repeated when a colon or spaced dash sets it apart,
+    # so "The Housemaid's Secret" and "Children of Dune" keep their full titles.
+    separator = r"(?:\s*:\s*|\s+[-\u2013\u2014]\s+)"
+    repeated_suffix = re.fullmatch(rf"(.+?){separator}{re.escape(series)}", title, re.IGNORECASE)
+    repeated_prefix = re.fullmatch(rf"{re.escape(series)}{separator}(.+)", title, re.IGNORECASE)
+    if repeated_suffix:
+        title = repeated_suffix.group(1).rstrip(" :-\u2013\u2014")
+    elif repeated_prefix:
+        title = repeated_prefix.group(1).lstrip(" :-\u2013\u2014")
     if series_index:
         repeated_index = re.search(rf"\s+{re.escape(series_index)}$", title)
         if repeated_index:

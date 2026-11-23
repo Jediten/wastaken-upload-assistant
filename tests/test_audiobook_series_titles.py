@@ -63,3 +63,14 @@ def test_normalize_audiobook_title_removes_parenthesised_series_suffix():
     assert normalize_audiobook_title("Catching Fire (Hunger Games, Book 2)", "Hunger Games") == "Catching Fire"  # noqa: S101
     assert normalize_audiobook_title("Mockingjay [The Hunger Games #3]", "The Hunger Games", "3") == "Mockingjay"  # noqa: S101
     assert normalize_audiobook_title("(The Hunger Games)", "The Hunger Games") == "(The Hunger Games)"  # noqa: S101
+
+
+def test_normalize_audiobook_title_keeps_titles_that_only_share_words_with_the_series():
+    assert normalize_audiobook_title("The Housemaid's Secret", "The Housemaid", "2") == "The Housemaid's Secret"  # noqa: S101
+    assert normalize_audiobook_title("Dune Messiah", "Dune", "2") == "Dune Messiah"  # noqa: S101
+    assert normalize_audiobook_title("Children of Dune", "Dune", "3") == "Children of Dune"  # noqa: S101
+
+
+def test_normalize_audiobook_title_removes_series_set_apart_by_a_dash():
+    assert normalize_audiobook_title("The Housemaid - The Housemaid's Secret", "The Housemaid") == "The Housemaid's Secret"  # noqa: S101
+    assert normalize_audiobook_title("Livro Exemplo – Série Imaginária", "Série Imaginária") == "Livro Exemplo"  # noqa: S101, RUF001

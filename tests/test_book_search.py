@@ -15,6 +15,7 @@ from src.book_search import (
     search_audible_catalog,
     search_openlibrary_editions,
     split_release_name,
+    split_title_first_release_name,
     title_query_variants,
 )
 from src.meta import Meta
@@ -67,6 +68,12 @@ def test_title_query_variants_retry_without_the_subtitle():
 def test_split_release_name_takes_author_and_last_segment():
     assert split_release_name("Suzanne Collins - The Hunger Games, Book 01 - The Hunger Games") == ("Suzanne Collins", "The Hunger Games")
     assert split_release_name("Only A Title") == ("", "Only A Title")
+
+
+def test_split_title_first_release_name_needs_exactly_two_parts():
+    assert split_title_first_release_name("The Housemaids Wedding - Freida McFadden") == ("Freida McFadden", "The Housemaids Wedding")
+    assert split_title_first_release_name("Only A Title") == ("", "")
+    assert split_title_first_release_name("Suzanne Collins - The Hunger Games, Book 01 - The Hunger Games") == ("", "")
 
 
 @pytest.mark.asyncio
@@ -246,6 +253,59 @@ async def test_find_book_identifier_uses_folder_name_when_tags_are_empty(tmp_pat
     assert seen["audible"] == ("The Hunger Games", "Suzanne Collins", "audible.co.uk")
     assert seen["openlibrary"] == ("The Hunger Games", "Suzanne Collins", True)
     assert chosen["asin"] == ASIN
+
+
+@pytest.mark.asyncio
+async def test_find_book_identifier_reads_an_untagged_folder_title_first_when_author_first_finds_nothing(tmp_path, monkeypatch):
+    queries = []
+
+    async def fake_audible(title, author, domain, _base_dir, *, limit=10):  # noqa: ARG001
+        queries.append(("audible", title, author))
+        if (title, author) == ("The Housemaids Wedding", "Freida McFadden"):
+            return [{"source": "audible", "asin": ASIN, "title": "The Housemaid's Wedding", "author": "Freida McFadden", "runtime_minutes": 104, "domain": domain}]
+        return []
+
+    async def fake_openlibrary(title, author, _base_dir, *, audiobook, works_limit=3):  # noqa: ARG001
+        queries.append(("openlibrary", title, author))
+        return []
+
+    monkeypatch.setattr(book_search, "search_audible_catalog", fake_audible)
+    monkeypatch.setattr(book_search, "search_openlibrary_editions", fake_openlibrary)
+    meta = Meta(audiobook=True, basename_no_ext="The Housemaids Wedding - Freida McFadden", unattended=True)
+
+    chosen = await find_book_identifier(meta, str(tmp_path), None, duration_seconds=104 * 60)
+
+    assert queries == [
+        ("audible", "Freida McFadden", "The Housemaids Wedding"),
+        ("openlibrary", "Freida McFadden", "The Housemaids Wedding"),
+        ("audible", "The Housemaids Wedding", "Freida McFadden"),
+        ("openlibrary", "The Housemaids Wedding", "Freida McFadden"),
+    ]
+    assert chosen["asin"] == ASIN
+
+
+@pytest.mark.asyncio
+async def test_find_book_identifier_lets_the_tag_author_pick_the_title_side_of_the_folder(tmp_path, monkeypatch):
+    queries = []
+
+    async def fake_audible(title, author, _domain, _base_dir, *, limit=10):  # noqa: ARG001
+        queries.append((title, author))
+        return []
+
+    async def fake_openlibrary(title, author, _base_dir, *, audiobook, works_limit=3):  # noqa: ARG001
+        return []
+
+    monkeypatch.setattr(book_search, "search_audible_catalog", fake_audible)
+    monkeypatch.setattr(book_search, "search_openlibrary_editions", fake_openlibrary)
+
+    title_first = Meta(audiobook=True, author="Freida McFadden", basename_no_ext="The Housemaids Wedding - Freida McFadden", unattended=True)
+    assert await find_book_identifier(title_first, str(tmp_path), None) is None
+    assert queries == [("The Housemaids Wedding", "Freida McFadden")]
+
+    queries.clear()
+    author_first = Meta(audiobook=True, author="Freida McFadden", basename_no_ext="Freida McFadden - The Housemaids Wedding", unattended=True)
+    assert await find_book_identifier(author_first, str(tmp_path), None) is None
+    assert queries == [("The Housemaids Wedding", "Freida McFadden")]
 
 
 @pytest.mark.asyncio

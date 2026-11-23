@@ -74,12 +74,24 @@ def title_query_variants(title: str) -> list[str]:
     return variants
 
 
+def _release_name_parts(name: str) -> list[str]:
+    return [part.strip() for part in re.split(r"\s+[-–]\s+", str(name or "")) if part.strip()]  # noqa: RUF001
+
+
 def split_release_name(name: str) -> tuple[str, str]:
     """Return (author, title) from a folder named ``Author - Title`` or ``Author - Series - Title``."""
-    parts = [part.strip() for part in re.split(r"\s+[-–]\s+", str(name or "")) if part.strip()]  # noqa: RUF001
+    parts = _release_name_parts(name)
     if len(parts) < 2:
         return "", clean_search_title(parts[0]) if parts else ""
     return parts[0], clean_search_title(parts[-1])
+
+
+def split_title_first_release_name(name: str) -> tuple[str, str]:
+    """Return (author, title) from a folder named ``Title - Author``, or empty strings when the name has no two parts."""
+    parts = _release_name_parts(name)
+    if len(parts) != 2:
+        return "", ""
+    return parts[1], clean_search_title(parts[0])
 
 
 def similarity(left: Any, right: Any) -> float:
@@ -419,18 +431,30 @@ async def find_book_identifier(meta: Meta, base_dir: str, config: dict[str, Any]
 
     The tag title is tried first; when it finds nothing, the title without
     its subtitle is tried, since subtitles like "A Hunger Games Novel" are
-    not part of catalog titles.
+    not part of catalog titles. When the files carry no title, it comes
+    from the folder name, read as ``Author - Title`` and then as
+    ``Title - Author``; a tag author settles which side is the author.
     """
-    release_author, release_title = split_release_name(meta.basename_no_ext or "")
-    variants = title_query_variants(meta.title) or title_query_variants(release_title)
-    if not variants:
+    release_name = meta.basename_no_ext or ""
+    tag_author = str(meta.author or "").strip()
+    readings = [split_release_name(release_name)]
+    title_first = split_title_first_release_name(release_name)
+    if title_first[1]:
+        if not tag_author:
+            readings.append(title_first)
+        elif _names_match(tag_author, title_first[0]) > _names_match(tag_author, readings[0][0]):
+            readings = [title_first]
+    if str(meta.title or "").strip():
+        queries = [(variant, tag_author or readings[0][0]) for variant in title_query_variants(meta.title)]
+    else:
+        queries = [(variant, tag_author or reading_author) for reading_author, reading_title in readings for variant in title_query_variants(reading_title)]
+    if not queries:
         return None
-    author = str(meta.author or "").strip() or release_author
     narrator = str(meta.narrator or "").strip()
     domain = str((config or {}).get("DEFAULT", {}).get("audible_domain", "") or "").strip() or DEFAULT_AUDIBLE_DOMAIN
     candidates: list[dict[str, Any]] = []
-    title = variants[0]
-    for title in variants:
+    title, author = queries[0]
+    for title, author in queries:
         logger.info(f"[cyan]Searching catalogs for {title!r}{' by ' + author if author else ''}...[/cyan]")
         if meta.audiobook:
             candidates.extend(await search_audible_catalog(title, author, domain, base_dir))
