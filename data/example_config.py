@@ -609,7 +609,7 @@ config: dict[str, Any] = {
         #   IMMORTALSEED, INFINITYHD, IPTORRENTS, ITATORRENTS, KUFIRC, LAJIDUI, LASTDIGITALUNDERGROUND, LATTEAM, LEMONHD, LOCADORA, LONGPT, LST,
         #   LUMINARR, MAKINGOFF, MIDNIGHTSCENE, MTEAM, NEBULANCE, NIGHTBLOOM, NORDICQUALITY, NZBGEEK, NZBNEST, OLDTOONSWORLD, ONLYENCODES, ORPHEUS, PASSTHEPOPCORN,
         #   PEERGARDEN, POLISHTORRENT, PORTUGAS, PRIVATEHD, PTCAFE, PTERCLUB, PTFANS, PTGTK, PTSKIT, PTZONE, QINGWA, RACING4EVERYONE, RAILGUNPT,
-        #   RASTASTUGAN, REELFLIX, RETROFLIX, RETROMOVIESCLUB, ROCKETHD, SAMARITANO, SEEDPOOL, SHAREISLAND, SIMURG, SKIPTHECOMMERCIALS, SPEEDAPP,
+        #   RASTASTUGAN, REELFLIX, RETROFLIX, RETROMOVIESCLUB, ROCKETHD, SAMARITANO, SEEDPOOL, SHADOW, SHAREISLAND, SIMURG, SKIPTHECOMMERCIALS, SPEEDAPP,
         #   SUIO, SWARMAZON, THELEACHZONE, THEOLDSCHOOL, TORRENTEROS, TORRENTHAVEN, TORRENTHR, TORRENTLEECH, TOTHEGLORY, TVCHAOSUK, ULCX, UTOPIA,
         #   VIETMEDIAF, VULTU, XINGYUNGEPT, YUSCENE, ZENITH, ZMPT
         # This list is validated against the tracker blocks below by the test suite.
@@ -2971,9 +2971,10 @@ config: dict[str, Any] = {
             "cli_alias": "RTF",
             # Instead of using the tracker acronym for folder name when sym/hard linking, you can use a custom name
             "link_dir_name": "",
+            # Used to log in for a new API token when the saved one is missing or expired
             "username": "",
             "password": "",
-            # get_it_by_running_/api/ login command from https://retroflix.club/api/doc
+            # Optional: a token from the /api/login command at https://retroflix.club/api/doc
             "api_key": "",
             "announce_url": "",
             "anon": True,
@@ -3142,6 +3143,46 @@ config: dict[str, Any] = {
             "use_bluray_images": True,
             "bluray_image_size": "",
             "add_audio_spectrogram": True,
+            "inject_delay": 0,
+        },
+        "SHADOW": {
+            "cli_alias": "SHD",
+            # "use_for_search": False, set to True if using this tracker for automatic ID searching or description parsing
+            "api_key": "",
+            "anon": True,
+            "use_for_search": False,
+            # For authorized users only. Do not change this unless you know what you are doing
+            # Upload as featured
+            "featured": False,
+            # For authorized users only. Do not change this unless you know what you are doing
+            # Upload with double upload credit
+            "doubleup": False,
+            # For authorized users only. Do not change this unless you know what you are doing
+            # Upload as sticky/pinned
+            "sticky": False,
+            # The configurations below override the DEFAULT configuration
+            "add_logo": True,
+            "logo_size": "",
+            "thumbnail_size": "",
+            "screens_per_row": "",
+            "episode_overview": True,
+            "tonemapped_header": "[center]Screenshots have been adapted for SDR viewing, for reference only.[/center]",
+            "multiScreens": "",
+            "pack_thumb_size": "",
+            "charLimit": "",
+            "fileLimit": "",
+            "processLimit": "",
+            "custom_description_header": "",
+            "screenshot_header": "[h2]Screenshots[/h2]",
+            "disc_menu_header": "[h2]Disc Menu Screenshots[/h2]",
+            "audio_spectrogram_header": "[h2]Audio Spectrogram[/h2]",
+            "dynamic_hdr_plot_header": "[h2]Dynamic HDR Metadata[/h2]",
+            "custom_signature": "",
+            "add_bluray_link": True,
+            "use_bluray_images": True,
+            "bluray_image_size": "",
+            "add_audio_spectrogram": False,
+            "add_dynamic_hdr_plot": False,
             "inject_delay": 0,
         },
         "SHAREISLAND": {
